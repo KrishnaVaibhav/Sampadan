@@ -1089,10 +1089,7 @@
     <div class="brand card compact-card">
       <span class="eyebrow">Private Local PDF Workstation</span>
       <h1>Sampadan</h1>
-      <p>
-        Viewer-first local PDF tooling. The document stays on-device while edits, OCR, and trust
-        inspection stay available from the side dock.
-      </p>
+      <p>Viewer-first local PDF editing, OCR, and trust inspection with on-device processing.</p>
     </div>
 
     <section class="card actions compact-card">
@@ -1256,10 +1253,7 @@
           <div class="empty-state">
             <span class="eyebrow">Local first</span>
             <h3>Open a PDF to start editing.</h3>
-            <p>
-              Sampadan keeps the document on-device and currently supports viewing, merging,
-              rotating, page extraction, reordering, and PNG export.
-            </p>
+            <p>Sampadan keeps the document on-device for viewing, editing, OCR, and export.</p>
             <button on:click={openPdfFlow}>Open a PDF</button>
           </div>
         {/if}
@@ -1576,10 +1570,7 @@
       </summary>
       <div class="dock-body ocr-layout">
         <div class="ocr-controls">
-          <p class="muted">
-            OCR stays on-device. Sampadan renders pages locally, sends page images to a local
-            Tesseract runtime, and keeps the extracted text in memory until you export it.
-          </p>
+          <p class="muted">OCR stays on-device through the local Tesseract runtime.</p>
 
           <div class="inspector-block">
             <span class="meta-label">Runtime</span>
