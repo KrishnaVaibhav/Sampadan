@@ -6,6 +6,7 @@
   import { fetchOcrStatus, runOcrForBlob, runOcrPdfForBlob } from './lib/ocr/ocr-client'
   import { type PdfProxy, loadPdfProxy } from './lib/pdf-engine'
   import {
+    addAttachmentToDocument,
     addReviewNoteToDocument,
     addPageNumbersToDocument,
     addImageStampToDocument,
@@ -140,6 +141,7 @@
   let rangeExpression = '1'
   let metadataDraft = emptyMetadata()
   let metadataDirty = false
+  let attachmentDescriptionDraft = ''
   let editScope: 'current' | 'all' = 'current'
   let watermarkText = 'CONFIDENTIAL'
   let watermarkPosition: WatermarkPosition = 'center'
@@ -709,6 +711,46 @@
       status = `Exported ${attachments.length} attachment${attachments.length === 1 ? '' : 's'}`
     } catch (error) {
       reportError(error, 'Failed to export embedded attachments')
+    } finally {
+      busy = false
+    }
+  }
+
+  async function attachEmbeddedFile() {
+    if (!workspace || busy) return
+
+    const selection = await openDialog({
+      multiple: false,
+    })
+    const [path] = normalizeSelection(selection)
+    if (!path) return
+
+    const currentWorkspace = workspace
+    const fileName = fileNameFromPath(path)
+
+    busy = true
+    statusTone = 'busy'
+    status = `Attaching ${fileName}`
+    lastError = null
+
+    try {
+      const attachmentFile = await invoke<LoadedFileBytesPayload>('load_file_bytes', { path })
+      const attachmentBytes = base64ToBytes(attachmentFile.bytesBase64)
+      const nextBytes = await addAttachmentToDocument(currentWorkspace.bytes, attachmentBytes, {
+        name: attachmentFile.fileName,
+        description: attachmentDescriptionDraft,
+      })
+
+      await commitGeneratedPdf(nextBytes, {
+        fileName: currentWorkspace.fileName,
+        current: currentPage,
+      })
+
+      attachmentDescriptionDraft = ''
+      statusTone = 'idle'
+      status = `Attached ${attachmentFile.fileName} to ${currentWorkspace.fileName}`
+    } catch (error) {
+      reportError(error, 'Failed to attach the selected file')
     } finally {
       busy = false
     }
@@ -1914,16 +1956,31 @@
             </div>
           {/if}
 
-          {#if attachmentSummaries.length > 0}
-            <div class="inspector-block">
-              <div class="section-head compact-head">
-                <h3>Attachments</h3>
-                <button on:click={exportEmbeddedAttachments} disabled={busy || !workspace || attachmentSummaries.length === 0}>
-                  Export Attachments
-                </button>
-              </div>
-              <span class="meta-label">Embedded files</span>
-              <strong>{attachmentSummaries.length} embedded file{attachmentSummaries.length === 1 ? '' : 's'}</strong>
+          <div class="inspector-block">
+            <div class="section-head compact-head">
+              <h3>Attachments</h3>
+              <span class="pill">{attachmentSummaries.length}</span>
+            </div>
+            <span class="meta-label">Embedded files</span>
+            <strong>{attachmentSummaries.length} embedded file{attachmentSummaries.length === 1 ? '' : 's'}</strong>
+            <label class="field">
+              <span class="field-label">Attachment Description</span>
+              <input
+                class="field-input"
+                bind:value={attachmentDescriptionDraft}
+                disabled={busy || !workspace}
+                placeholder="Optional note for the embedded file"
+              />
+            </label>
+            <div class="tool-grid">
+              <button data-testid="attach-file-button" on:click={attachEmbeddedFile} disabled={busy || !workspace}>
+                Attach File
+              </button>
+              <button on:click={exportEmbeddedAttachments} disabled={busy || !workspace || attachmentSummaries.length === 0}>
+                Export Attachments
+              </button>
+            </div>
+            {#if attachmentSummaries.length > 0}
               {#each attachmentSummaries as attachment}
                 <div class="stack-list attachment-entry">
                   <span>{attachment.fileName ?? 'Unnamed attachment'}</span>
@@ -1939,8 +1996,10 @@
                   {/each}
                 </div>
               {/each}
-            </div>
-          {/if}
+            {:else}
+              <span class="muted">No embedded files yet.</span>
+            {/if}
+          </div>
 
           {#if signatureSummaries.length > 0}
             {#each signatureSummaries as signature, index}

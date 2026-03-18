@@ -213,6 +213,7 @@ describe('real PDF workflow actions', () => {
     const sourcePath = 'C:/docs/workflow.pdf'
     const insertPath = 'C:/docs/insert-source.pdf'
     const imagePath = 'C:/assets/stamp.png'
+    const attachmentPath = 'C:/attachments/report.txt'
     const mergePath = 'C:/docs/merge-source.pdf'
     const sourceBytes = await createSamplePdf(3)
     const insertBytes = await createSamplePdf(1)
@@ -224,7 +225,7 @@ describe('real PDF workflow actions', () => {
     ])
     let currentBytes = sourceBytes
     let directorySelectionIndex = 0
-    const singleFileSelections = [sourcePath, sourcePath, sourcePath, insertPath, imagePath]
+    const singleFileSelections = [sourcePath, sourcePath, sourcePath, insertPath, imagePath, attachmentPath]
 
     invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
       switch (command) {
@@ -254,11 +255,20 @@ describe('real PDF workflow actions', () => {
           currentBytes = bytes
           return buildPayload(bytes, fileNameFromPath(path), path)
         }
-        case 'load_file_bytes':
-          return {
-            fileName: 'stamp.png',
-            bytesBase64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==',
+        case 'load_file_bytes': {
+          const path = String(args?.path ?? '')
+          if (path.toLowerCase().endsWith('.png')) {
+            return {
+              fileName: 'stamp.png',
+              bytesBase64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==',
+            }
           }
+
+          return {
+            fileName: 'report.txt',
+            bytesBase64: encodeBase64(Uint8Array.from(new TextEncoder().encode('release checklist'))),
+          }
+        }
         case 'inspect_pdf_bytes': {
           const nextBytes = decodeBase64(String(args?.bytesBase64 ?? ''))
           currentBytes = nextBytes
@@ -367,6 +377,12 @@ describe('real PDF workflow actions', () => {
       expect(screen.getByText('Placed image stamp on page 2')).toBeTruthy()
     })
 
+    await user.type(screen.getByLabelText('Attachment Description'), 'Release checklist')
+    await user.click(screen.getByTestId('attach-file-button'))
+    await waitFor(() => {
+      expect(screen.getByText('Attached report.txt to workflow.pdf')).toBeTruthy()
+    })
+
     await user.type(screen.getByLabelText('Note Text'), 'Follow up on the inserted page.')
     await user.click(screen.getByRole('button', { name: 'Add Review Note' }))
     await waitFor(() => {
@@ -426,7 +442,7 @@ describe('real PDF workflow actions', () => {
       const inspectCalls = invokeMock.mock.calls.filter(([command]) => command === 'inspect_pdf_bytes')
       const saveCalls = invokeMock.mock.calls.filter(([command]) => command === 'save_file_bytes')
 
-      expect(inspectCalls.length).toBeGreaterThanOrEqual(12)
+      expect(inspectCalls.length).toBeGreaterThanOrEqual(13)
       expect(saveCalls.length).toBe(17)
     })
 

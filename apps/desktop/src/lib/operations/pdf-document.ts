@@ -354,6 +354,33 @@ export async function addImageStampToDocument(
   return saveDocument(document)
 }
 
+export async function addAttachmentToDocument(
+  bytes: Uint8Array,
+  attachmentBytes: Uint8Array,
+  options: {
+    name: string
+    description?: string
+  },
+) {
+  const { AFRelationship } = await getPdfLib()
+  const document = await loadDocument(bytes)
+  const name = options.name.trim()
+
+  if (!name) {
+    throw new Error('Choose a file name before attaching a file.')
+  }
+
+  await document.attach(attachmentBytes, name, {
+    mimeType: inferAttachmentMimeType(name),
+    description: options.description?.trim() || undefined,
+    creationDate: new Date(),
+    modificationDate: new Date(),
+    afRelationship: AFRelationship.Data,
+  })
+
+  return saveDocument(document)
+}
+
 export async function addReviewNoteToDocument(
   bytes: Uint8Array,
   options: {
@@ -503,6 +530,51 @@ function isPng(bytes: Uint8Array) {
 
 function isJpeg(bytes: Uint8Array) {
   return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+}
+
+function inferAttachmentMimeType(fileName: string) {
+  const extension = fileName.split('.').pop()?.toLowerCase() ?? ''
+
+  switch (extension) {
+    case 'txt':
+      return 'text/plain'
+    case 'csv':
+      return 'text/csv'
+    case 'json':
+      return 'application/json'
+    case 'xml':
+      return 'application/xml'
+    case 'html':
+    case 'htm':
+      return 'text/html'
+    case 'pdf':
+      return 'application/pdf'
+    case 'png':
+      return 'image/png'
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg'
+    case 'gif':
+      return 'image/gif'
+    case 'svg':
+      return 'image/svg+xml'
+    case 'zip':
+      return 'application/zip'
+    case 'doc':
+      return 'application/msword'
+    case 'docx':
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    case 'xls':
+      return 'application/vnd.ms-excel'
+    case 'xlsx':
+      return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    case 'ppt':
+      return 'application/vnd.ms-powerpoint'
+    case 'pptx':
+      return 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+    default:
+      return 'application/octet-stream'
+  }
 }
 
 function wrapTextToWidth(

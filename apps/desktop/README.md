@@ -17,6 +17,7 @@ This package contains the local-first desktop application for Sampadan.
 - rotate, reorder, duplicate, delete, and insert blank pages
 - extract page ranges and split documents into single-page files
 - add text watermarks, image stamps, review notes, and page numbers
+- embed local attachment files into PDFs and export embedded attachments
 - export page PNGs and document text
 - edit PDF metadata
 - save password-protected PDF copies through local `qpdf`

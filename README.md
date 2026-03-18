@@ -26,6 +26,7 @@ Current local features include:
 - run local OCR on the current page or a full document when Tesseract is installed
 - create searchable OCR PDF copies locally
 - inspect PDF signatures, attachments, and encryption signals
+- embed local files into PDFs as attachments
 - export embedded PDF attachments locally when attachment streams are present
 - save password-protected PDF copies locally through `qpdf`
 - cryptographically verify detached CMS PDF signatures locally when OpenSSL is available

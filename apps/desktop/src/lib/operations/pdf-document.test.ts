@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest'
 
 import { createSamplePdf, readPdfSummary } from '../../test/pdf-fixtures'
 import {
+  addAttachmentToDocument,
   addPageNumbersToDocument,
   addImageStampToDocument,
   addReviewNoteToDocument,
@@ -45,6 +46,27 @@ async function readPdfText(bytes: Uint8Array) {
   } finally {
     await document.destroy()
   }
+}
+
+async function readAttachmentNames(bytes: Uint8Array) {
+  const { PDFDocument, PDFArray, PDFDict, PDFHexString, PDFName, PDFString } = await import('pdf-lib')
+  const document = await PDFDocument.load(bytes.slice(), { updateMetadata: false })
+  const names = document.catalog.lookup(PDFName.of('Names'), PDFDict)
+  const embeddedFiles = names?.lookupMaybe(PDFName.of('EmbeddedFiles'), PDFDict)
+  const nameEntries = embeddedFiles?.lookupMaybe(PDFName.of('Names'), PDFArray)
+
+  if (!nameEntries) {
+    return []
+  }
+
+  const attachmentNames: string[] = []
+  for (let index = 0; index < nameEntries.size(); index += 2) {
+    const value = nameEntries.lookupMaybe(index, PDFString, PDFHexString)
+    if (!value) continue
+    attachmentNames.push(value.decodeText())
+  }
+
+  return attachmentNames
 }
 
 describe('real PDF document operations', () => {
@@ -137,6 +159,22 @@ describe('real PDF document operations', () => {
 
     expect((await readPdfSummary(stamped)).pageCount).toBe(2)
     expect(stamped.length).toBeGreaterThan(source.length)
+  })
+
+  test('attachment insertion preserves the PDF and registers an embedded file name', async () => {
+    const source = await createSamplePdf(2)
+
+    const attached = await addAttachmentToDocument(
+      source,
+      Uint8Array.from(new TextEncoder().encode('release checklist')),
+      {
+        name: 'report.txt',
+        description: 'Release checklist',
+      },
+    )
+
+    expect((await readPdfSummary(attached)).pageCount).toBe(2)
+    expect(await readAttachmentNames(attached)).toContain('report.txt')
   })
 
   test('review notes preserve readability and embed the note text', async () => {

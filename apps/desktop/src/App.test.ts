@@ -55,6 +55,7 @@ vi.mock('./lib/viewer/pdf-viewer', () => ({
 vi.mock('./lib/operations/pdf-document', () => ({
   mergeDocuments: vi.fn(async () => Uint8Array.from([9, 9, 9, 9])),
   insertDocumentAfterPage: vi.fn(async () => Uint8Array.from([8, 8, 8, 8])),
+  addAttachmentToDocument: vi.fn(async () => Uint8Array.from([4, 4, 4, 4])),
   addImageStampToDocument: vi.fn(async () => Uint8Array.from([6, 6, 6])),
   addReviewNoteToDocument: vi.fn(async () => Uint8Array.from([7, 7, 7])),
   rotatePageInDocument: vi.fn(async () => Uint8Array.from([1, 2, 3])),
@@ -225,11 +226,20 @@ beforeEach(() => {
         return createPayload()
       case 'protect_pdf_bytes':
         return createPayload((args?.fileName as string | undefined) ?? 'sample-protected.pdf', null)
-      case 'load_file_bytes':
-        return {
-          fileName: 'stamp.png',
-          bytesBase64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==',
+      case 'load_file_bytes': {
+        const path = String(args?.path ?? '')
+        if (path.toLowerCase().endsWith('.png')) {
+          return {
+            fileName: 'stamp.png',
+            bytesBase64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==',
+          }
         }
+
+        return {
+          fileName: path.split(/[\\/]/).pop() ?? 'report.txt',
+          bytesBase64: encodeBase64('attachment-bytes'),
+        }
+      }
       case 'save_file_bytes':
         return null
       case 'extract_pdf_attachments':
@@ -291,6 +301,7 @@ describe('Sampadan desktop app regression suite', () => {
       'Export Text',
       'Export Trust Report',
       'Export Attachments',
+      'Attach File',
       'Extract Range',
       'Split To Folder',
       'Insert PDF After',
@@ -384,6 +395,41 @@ describe('Sampadan desktop app regression suite', () => {
 
     expectCamelCasePayloadKeys(getInvokePayloads('extract_pdf_attachments'), ['bytesBase64'])
     expectCamelCasePayloadKeys(getInvokePayloads('save_file_bytes'), ['path', 'bytesBase64'])
+  })
+
+  test('attaches a local file through the PDF mutation pipeline', async () => {
+    openDialogMock
+      .mockResolvedValueOnce('C:/docs/sample.pdf')
+      .mockResolvedValueOnce('C:/attachments/report.txt')
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect((screen.getByTestId('attach-file-button') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    await user.type(screen.getByLabelText('Attachment Description'), 'Release checklist')
+    await user.click(screen.getByTestId('attach-file-button'))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        'load_file_bytes',
+        expect.objectContaining({ path: 'C:/attachments/report.txt' }),
+      )
+      expect(invokeMock).toHaveBeenCalledWith(
+        'inspect_pdf_bytes',
+        expect.objectContaining({
+          fileName: 'sample.pdf',
+          bytesBase64: expect.any(String),
+        }),
+      )
+      expect(screen.getByText('Attached report.txt to sample.pdf')).toBeTruthy()
+    })
+
+    expectCamelCasePayloadKeys(getInvokePayloads('load_file_bytes'), ['path'])
+    expectCamelCasePayloadKeys(getInvokePayloads('inspect_pdf_bytes'), ['fileName', 'bytesBase64'])
   })
 
   test('creates a searchable OCR copy through the local OCR pipeline', async () => {
