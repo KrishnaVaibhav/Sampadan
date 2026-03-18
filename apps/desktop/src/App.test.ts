@@ -175,6 +175,24 @@ function createPayload(fileName = 'sample.pdf', path: string | null = 'C:/docs/s
   }
 }
 
+function getInvokePayloads(command: string): Array<Record<string, unknown>> {
+  return invokeMock.mock.calls
+    .filter(([name]) => name === command)
+    .map(([, payload]) => (payload ?? {}) as Record<string, unknown>)
+}
+
+function expectCamelCasePayloadKeys(
+  payloads: Array<Record<string, unknown>>,
+  expectedKeys: string[],
+) {
+  expect(payloads.length).toBeGreaterThan(0)
+
+  for (const payload of payloads) {
+    expect(Object.keys(payload)).toEqual(expect.arrayContaining(expectedKeys))
+    expect(Object.keys(payload).some((key) => key.includes('_'))).toBe(false)
+  }
+}
+
 beforeEach(() => {
   openDialogMock.mockReset()
   saveDialogMock.mockReset()
@@ -288,9 +306,12 @@ describe('Sampadan desktop app regression suite', () => {
         'save_file_bytes',
         expect.objectContaining({
           path: 'C:/exports/sample-trust-report.json',
+          bytesBase64: expect.any(String),
         }),
       )
     })
+
+    expectCamelCasePayloadKeys(getInvokePayloads('save_file_bytes'), ['path', 'bytesBase64'])
   })
 
   test('creates a searchable OCR copy through the local OCR pipeline', async () => {
@@ -307,15 +328,74 @@ describe('Sampadan desktop app regression suite', () => {
     await user.click(screen.getByTestId('searchable-pdf-button'))
 
     await waitFor(() => {
-      const ocrPdfCalls = invokeMock.mock.calls.filter(([command]) => command === 'run_ocr_pdf')
+      const ocrPdfCalls = getInvokePayloads('run_ocr_pdf')
       expect(ocrPdfCalls).toHaveLength(3)
       expect(invokeMock).toHaveBeenCalledWith(
         'inspect_pdf_bytes',
         expect.objectContaining({
           fileName: 'sample-searchable.pdf',
+          bytesBase64: expect.any(String),
         }),
       )
     })
+
+    expectCamelCasePayloadKeys(getInvokePayloads('run_ocr_pdf'), ['bytesBase64', 'language', 'sourceLabel'])
+    expectCamelCasePayloadKeys(getInvokePayloads('inspect_pdf_bytes'), ['fileName', 'bytesBase64'])
+  })
+
+  test('sends camelCase payloads through the OCR workbench actions', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
+    saveDialogMock.mockResolvedValue('C:/exports/sample-ocr.txt')
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect((screen.getByTestId('ocr-page-button') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    await user.click(screen.getByTestId('ocr-page-button'))
+
+    await waitFor(() => {
+      const ocrImageCalls = getInvokePayloads('run_ocr_image')
+      expect(ocrImageCalls).toHaveLength(1)
+      expect(ocrImageCalls[0]).toEqual(
+        expect.objectContaining({
+          bytesBase64: expect.any(String),
+          language: 'eng',
+          sourceLabel: 'sample.pdf page 1',
+        }),
+      )
+    })
+
+    await user.click(screen.getByRole('button', { name: 'OCR Document' }))
+
+    await waitFor(() => {
+      const ocrImageCalls = getInvokePayloads('run_ocr_image')
+      expect(ocrImageCalls).toHaveLength(4)
+      expect(ocrImageCalls.slice(1).map((payload) => payload.sourceLabel)).toEqual([
+        'sample.pdf page 1',
+        'sample.pdf page 2',
+        'sample.pdf page 3',
+      ])
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Export OCR Text' }))
+
+    await waitFor(() => {
+      const saveCalls = getInvokePayloads('save_file_bytes')
+      expect(saveCalls).toHaveLength(1)
+      expect(saveCalls[0]).toEqual(
+        expect.objectContaining({
+          path: 'C:/exports/sample-ocr.txt',
+          bytesBase64: expect.any(String),
+        }),
+      )
+    })
+
+    expectCamelCasePayloadKeys(getInvokePayloads('run_ocr_image'), ['bytesBase64', 'language', 'sourceLabel'])
+    expectCamelCasePayloadKeys(getInvokePayloads('save_file_bytes'), ['path', 'bytesBase64'])
   })
 
   test('runs structural edit and export buttons through the local pipelines', async () => {
@@ -361,5 +441,8 @@ describe('Sampadan desktop app regression suite', () => {
       expect(inspectCalls.length).toBeGreaterThanOrEqual(9)
       expect(saveCalls.length).toBeGreaterThanOrEqual(5)
     })
+
+    expectCamelCasePayloadKeys(getInvokePayloads('inspect_pdf_bytes'), ['fileName', 'bytesBase64'])
+    expectCamelCasePayloadKeys(getInvokePayloads('save_file_bytes'), ['path', 'bytesBase64'])
   })
 })

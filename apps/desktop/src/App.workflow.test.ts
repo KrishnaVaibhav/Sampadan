@@ -72,6 +72,24 @@ const detachBytes = (bytes: Uint8Array) => {
   structuredClone(bytes, { transfer: [bytes.buffer] })
 }
 
+function getInvokePayloads(command: string): Array<Record<string, unknown>> {
+  return invokeMock.mock.calls
+    .filter(([name]) => name === command)
+    .map(([, payload]) => (payload ?? {}) as Record<string, unknown>)
+}
+
+function expectCamelCasePayloadKeys(
+  payloads: Array<Record<string, unknown>>,
+  expectedKeys: string[],
+) {
+  expect(payloads.length).toBeGreaterThan(0)
+
+  for (const payload of payloads) {
+    expect(Object.keys(payload)).toEqual(expect.arrayContaining(expectedKeys))
+    expect(Object.keys(payload).some((key) => key.includes('_'))).toBe(false)
+  }
+}
+
 const emptyTrustReport: PdfTrustReport = {
   signatureCount: 0,
   signatures: [],
@@ -359,6 +377,9 @@ describe('real PDF workflow actions', () => {
       expect(inspectCalls.length).toBeGreaterThanOrEqual(7)
       expect(saveCalls.length).toBe(15)
     })
+
+    expectCamelCasePayloadKeys(getInvokePayloads('inspect_pdf_bytes'), ['fileName', 'bytesBase64'])
+    expectCamelCasePayloadKeys(getInvokePayloads('save_file_bytes'), ['path', 'bytesBase64'])
 
     const savedEditedSummary = await readPdfSummary(diskFiles.get('C:/docs/workflow-edited.pdf')!)
     expect(savedEditedSummary.title).toBe('Workflow Edited')
