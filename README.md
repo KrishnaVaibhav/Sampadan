@@ -10,7 +10,17 @@ The project is intended to cover practical PDF workflows such as editing, OCR, f
 
 ## Status
 
-Bootstrap phase.
+Working desktop foundation.
+
+Current local features include:
+
+- open, save, and merge PDFs
+- page thumbnails and drag reordering
+- rotate, duplicate, delete, and insert blank pages
+- extract current pages and custom page ranges
+- split to single-page PDFs
+- export page PNGs and document text
+- metadata inspection and editing
 
 ## Architecture
 

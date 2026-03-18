@@ -116,6 +116,7 @@ button:disabled {
 
 .brand,
 .actions,
+.page-tools,
 .recent-list,
 .roadmap,
 .topbar,
@@ -169,6 +170,7 @@ button:disabled {
 }
 
 .actions,
+.page-tools,
 .recent-list,
 .roadmap {
   display: flex;
@@ -270,7 +272,9 @@ button:disabled {
 .toolbar,
 .flag-grid,
 .stack-list,
-.export-list {
+.export-list,
+.tool-grid,
+.stack-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.6rem;
@@ -288,7 +292,7 @@ button:disabled {
 
 .workspace-grid {
   display: grid;
-  grid-template-columns: 210px minmax(0, 1fr) 280px;
+  grid-template-columns: 250px minmax(0, 1fr) 320px;
   gap: 1rem;
   min-height: 0;
   flex: 1;
@@ -315,10 +319,12 @@ button:disabled {
 }
 
 .page-chip {
-  display: grid;
-  gap: 0.15rem;
-  justify-items: start;
-  padding: 0.85rem 0.95rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  align-items: stretch;
+  padding: 0.7rem;
+  text-align: left;
 }
 
 .page-chip.active {
@@ -327,10 +333,93 @@ button:disabled {
   border-color: rgba(243, 165, 48, 0.42);
 }
 
-.page-chip span,
+.page-chip.drag-source {
+  opacity: 0.72;
+}
+
+.page-chip.drop-target {
+  border-color: rgba(80, 152, 255, 0.55);
+  background:
+    linear-gradient(180deg, rgba(80, 152, 255, 0.18), rgba(24, 44, 83, 0.16));
+}
+
+.page-thumb {
+  width: 100%;
+  aspect-ratio: 0.72;
+  object-fit: cover;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #ffffff;
+  box-shadow: 0 12px 22px rgba(0, 0, 0, 0.22);
+}
+
+.placeholder-thumb {
+  display: grid;
+  place-items: center;
+  color: var(--text-soft);
+  border: 1px dashed var(--border-strong);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.page-chip-body {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.page-chip-body span,
 .stack-list span,
 .export-list span {
   color: var(--text-soft);
+}
+
+.field {
+  display: grid;
+  gap: 0.42rem;
+}
+
+.field-grid {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.field-label {
+  color: var(--text-soft);
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.field-input {
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-main);
+  padding: 0.78rem 0.92rem;
+  outline: none;
+}
+
+.field-input:focus {
+  border-color: rgba(243, 165, 48, 0.5);
+  box-shadow: 0 0 0 3px rgba(243, 165, 48, 0.12);
+}
+
+.stack-actions,
+.tool-grid {
+  display: grid;
+}
+
+.tool-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.compact-head {
+  margin-bottom: 0.7rem;
+}
+
+.compact-head h3 {
+  margin: 0;
+  font-size: 1rem;
 }
 
 .viewer-shell {

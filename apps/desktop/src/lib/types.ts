@@ -20,6 +20,22 @@ export interface LoadedPdfPayload {
   flags: PdfFlags
 }
 
+export interface PdfMetadataDraft {
+  title: string
+  author: string
+  subject: string
+  keywords: string
+  creator: string
+  producer: string
+}
+
+export interface PageThumbnail {
+  pageNumber: number
+  dataUrl: string
+  width: number
+  height: number
+}
+
 export interface WorkspaceDocument {
   path: string | null
   fileName: string

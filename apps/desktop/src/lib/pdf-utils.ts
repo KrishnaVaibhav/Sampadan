@@ -73,3 +73,51 @@ export function joinPath(directory: string, fileName: string): string {
   const separator = directory.includes('\\') ? '\\' : '/'
   return `${directory.replace(/[\\/]+$/, '')}${separator}${fileName}`
 }
+
+export function parsePageSelection(expression: string, pageCount: number): number[] {
+  const tokens = expression
+    .split(',')
+    .map((token) => token.trim())
+    .filter(Boolean)
+
+  if (tokens.length === 0) {
+    throw new Error('Enter one or more pages, for example 1-3, 5, 8-10.')
+  }
+
+  const pages = new Set<number>()
+
+  for (const token of tokens) {
+    const single = token.match(/^(\d+)$/)
+    if (single) {
+      const value = Number(single[1])
+      assertPageBounds(value, pageCount)
+      pages.add(value)
+      continue
+    }
+
+    const range = token.match(/^(\d+)\s*-\s*(\d+)$/)
+    if (range) {
+      const start = Number(range[1])
+      const end = Number(range[2])
+      assertPageBounds(start, pageCount)
+      assertPageBounds(end, pageCount)
+
+      const lower = Math.min(start, end)
+      const upper = Math.max(start, end)
+      for (let value = lower; value <= upper; value += 1) {
+        pages.add(value)
+      }
+      continue
+    }
+
+    throw new Error(`Invalid page selection token "${token}". Use values like 2 or 4-9.`)
+  }
+
+  return [...pages].sort((left, right) => left - right)
+}
+
+function assertPageBounds(pageNumber: number, pageCount: number) {
+  if (pageNumber < 1 || pageNumber > pageCount) {
+    throw new Error(`Page ${pageNumber} is outside this document. Valid pages are 1-${pageCount}.`)
+  }
+}

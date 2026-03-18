@@ -171,12 +171,12 @@ These are the modules the codebase should grow into instead of adding more logic
 
 ### Frontend packages
 
-- `src/lib/session/`
-  Session loading, save orchestration, recent files, command wrappers
-- `src/lib/viewer/`
-  PDF.js canvas rendering, thumbnails, search, text extraction
-- `src/lib/operations/`
-  merge, rotate, extract, reorder, export helpers
+- `src/lib/session/recent-files.ts`
+  Current recent-file persistence module
+- `src/lib/viewer/pdf-viewer.ts`
+  PDF.js canvas rendering, thumbnails, and text extraction
+- `src/lib/operations/pdf-document.ts`
+  merge, rotate, extract, reorder, split, metadata, and export helpers
 - `src/lib/conversion/`
   PNG export, image pipelines, later DOCX/HTML export adapters
 - `src/lib/components/`
@@ -228,6 +228,14 @@ When adding a new feature:
 - drag reordering
 - metadata editor
 - better undo-safe save flow
+
+Status on March 18, 2026:
+
+- thumbnail strip implemented
+- split/range extraction implemented
+- page delete/insert/duplicate implemented
+- drag reordering implemented
+- metadata editor implemented
 
 ### Milestone 3
 

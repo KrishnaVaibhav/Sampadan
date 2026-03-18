@@ -3,7 +3,19 @@
   import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
   import { onMount, tick } from 'svelte'
 
-  import { getPdfLib, loadPdfProxy, type PdfProxy } from './lib/pdf-engine'
+  import { type PdfProxy, loadPdfProxy } from './lib/pdf-engine'
+  import {
+    applyMetadataToDocument,
+    deletePageFromDocument,
+    duplicatePageInDocument,
+    extractPagesFromDocument,
+    insertBlankPageAfterCurrent,
+    mergeDocuments,
+    movePageInDocument,
+    readMetadataFromDocument,
+    rotatePageInDocument,
+    splitDocumentIntoSinglePages,
+  } from './lib/operations/pdf-document'
   import {
     base64ToBytes,
     blobToBase64,
@@ -12,12 +24,20 @@
     fileNameFromPath,
     formatBytes,
     joinPath,
+    parsePageSelection,
     withExtension,
     withoutExtension,
   } from './lib/pdf-utils'
-  import type { LoadedPdfPayload, PdfFlags, WorkspaceDocument } from './lib/types'
+  import { loadRecentPaths, rememberRecentPath } from './lib/session/recent-files'
+  import type {
+    LoadedPdfPayload,
+    PageThumbnail,
+    PdfFlags,
+    PdfMetadataDraft,
+    WorkspaceDocument,
+  } from './lib/types'
+  import { extractDocumentText, generatePageThumbnails, renderPdfPageToCanvas } from './lib/viewer/pdf-viewer'
 
-  const RECENTS_KEY = 'sampadan.recentPaths'
   const emptyFlags: PdfFlags = {
     encrypted: false,
     signed: false,
@@ -31,37 +51,33 @@
     mixedContent: false,
   }
 
+  const emptyMetadata = (): PdfMetadataDraft => ({
+    title: '',
+    author: '',
+    subject: '',
+    keywords: '',
+    creator: '',
+    producer: '',
+  })
+
   const roadmap = [
     {
       title: 'Live Local Operations',
       items: [
-        'Open PDFs from disk',
-        'Navigate and zoom pages',
-        'Rotate the active page',
-        'Reorder pages left or right',
-        'Extract the active page into a new PDF',
-        'Merge multiple PDFs locally',
-        'Save or Save As',
-        'Export page PNGs',
+        'Open, save, merge, and inspect PDFs',
+        'Rotate, drag reorder, duplicate, delete, and insert blank pages',
+        'Extract current pages and custom page ranges',
+        'Split documents into single-page PDFs',
+        'Export page PNGs and full-document text',
       ],
     },
     {
-      title: 'Next Local Features',
+      title: 'Queued Next',
       items: [
-        'Batch split and range extract',
-        'Full-document PNG export',
         'Tesseract OCR jobs',
-        'Search index cache',
-      ],
-    },
-    {
-      title: 'Advanced PDF Work',
-      items: [
         'Annotations and comments',
         'AcroForm editing',
         'Signature validation',
-        'PDF/A validation',
-        'XFA handling strategy',
       ],
     },
   ]
@@ -78,9 +94,18 @@
   let lastError: string | null = null
   let recentPaths: string[] = []
   let renderToken = 0
+  let thumbnailToken = 0
+  let metadataToken = 0
+  let thumbnails: PageThumbnail[] = []
+  let rangeExpression = '1'
+  let metadataDraft = emptyMetadata()
+  let metadataDirty = false
+  let dragSourcePage: number | null = null
+  let dropTargetPage: number | null = null
 
   $: pageItems = workspace ? Array.from({ length: workspace.pageCount }, (_, index) => index + 1) : []
   $: currentZoomLabel = `${Math.round(zoom * 100)}%`
+  $: thumbnailMap = new Map(thumbnails.map((thumbnail) => [thumbnail.pageNumber, thumbnail]))
   $: inspectorFlags = workspace
     ? [
         { label: 'Encrypted', active: workspace.flags.encrypted },
@@ -97,14 +122,7 @@
     : []
 
   onMount(() => {
-    try {
-      const stored = localStorage.getItem(RECENTS_KEY)
-      if (stored) {
-        recentPaths = JSON.parse(stored) as string[]
-      }
-    } catch {
-      recentPaths = []
-    }
+    recentPaths = loadRecentPaths()
 
     const handleKeyDown = (event: KeyboardEvent) => {
       const modifier = event.ctrlKey || event.metaKey
@@ -159,7 +177,7 @@
 
     try {
       const payload = await invoke<LoadedPdfPayload>('load_pdf', { path })
-      persistRecentPath(path)
+      recentPaths = rememberRecentPath(recentPaths, path)
       await loadPayload(payload, {
         current: preferredPage,
         modified: false,
@@ -190,21 +208,13 @@
     lastError = null
 
     try {
-      const { PDFDocument } = await getPdfLib()
-      const merged = workspace
-        ? await PDFDocument.load(workspace.bytes.slice())
-        : await PDFDocument.create()
-
+      const buffers: Uint8Array[] = workspace ? [workspace.bytes] : []
       for (const path of paths) {
         const payload = await invoke<LoadedPdfPayload>('load_pdf', { path })
-        const incoming = await PDFDocument.load(base64ToBytes(payload.bytesBase64))
-        const pages = await merged.copyPages(incoming, incoming.getPageIndices())
-        for (const page of pages) {
-          merged.addPage(page)
-        }
+        buffers.push(base64ToBytes(payload.bytesBase64))
       }
 
-      const mergedBytes = await merged.save()
+      const mergedBytes = await mergeDocuments(buffers)
       await commitGeneratedPdf(mergedBytes, {
         fileName: workspace ? workspace.fileName : 'merged.pdf',
         current: workspace ? currentPage : 1,
@@ -220,31 +230,15 @@
 
   async function rotateCurrentPage(delta: number) {
     if (!workspace || busy) return
+    const currentWorkspace = workspace
 
-    busy = true
-    statusTone = 'busy'
-    status = delta > 0 ? 'Rotating page right' : 'Rotating page left'
-    lastError = null
-
-    try {
-      const { PDFDocument, degrees } = await getPdfLib()
-      const doc = await PDFDocument.load(workspace.bytes.slice())
-      const page = doc.getPage(currentPage - 1)
-      const nextRotation = (page.getRotation().angle + delta + 360) % 360
-      page.setRotation(degrees(nextRotation))
-
-      const bytes = await doc.save()
-      await commitGeneratedPdf(bytes, {
-        fileName: workspace.fileName,
-        current: currentPage,
-      })
-      statusTone = 'idle'
-      status = `Rotated page ${currentPage}`
-    } catch (error) {
-      reportError(error, 'Failed to rotate the current page')
-    } finally {
-      busy = false
-    }
+    await runDocumentMutation({
+      workingStatus: delta > 0 ? 'Rotating page right' : 'Rotating page left',
+      successStatus: `Rotated page ${currentPage}`,
+      errorStatus: 'Failed to rotate the current page',
+      nextCurrentPage: currentPage,
+      mutate: () => rotatePageInDocument(currentWorkspace.bytes, currentPage - 1, delta),
+    })
   }
 
   async function moveCurrentPage(offset: number) {
@@ -254,62 +248,132 @@
     const targetIndex = clamp(sourceIndex + offset, 0, workspace.pageCount - 1)
     if (sourceIndex === targetIndex) return
 
-    busy = true
-    statusTone = 'busy'
-    status = offset > 0 ? 'Moving page right' : 'Moving page left'
-    lastError = null
+    await movePageTo(currentPage, targetIndex + 1)
+  }
 
-    try {
-      const { PDFDocument } = await getPdfLib()
-      const source = await PDFDocument.load(workspace.bytes.slice())
-      const reordered = await PDFDocument.create()
-      const pageOrder = Array.from({ length: source.getPageCount() }, (_, index) => index)
-      const [movedPage] = pageOrder.splice(sourceIndex, 1)
-      pageOrder.splice(targetIndex, 0, movedPage)
+  async function movePageTo(sourcePageNumber: number, targetPageNumber: number) {
+    if (!workspace || busy) return
+    const currentWorkspace = workspace
 
-      const pages = await reordered.copyPages(source, pageOrder)
-      for (const page of pages) {
-        reordered.addPage(page)
-      }
+    const sourceIndex = sourcePageNumber - 1
+    const targetIndex = targetPageNumber - 1
+    if (sourceIndex === targetIndex) return
 
-      const bytes = await reordered.save()
-      await commitGeneratedPdf(bytes, {
-        fileName: workspace.fileName,
-        current: targetIndex + 1,
-      })
-      statusTone = 'idle'
-      status = `Moved page to position ${targetIndex + 1}`
-    } catch (error) {
-      reportError(error, 'Failed to reorder pages')
-    } finally {
-      busy = false
-    }
+    await runDocumentMutation({
+      workingStatus: `Reordering page ${sourcePageNumber}`,
+      successStatus: `Moved page to position ${targetPageNumber}`,
+      errorStatus: 'Failed to reorder pages',
+      nextCurrentPage: targetPageNumber,
+      mutate: () => movePageInDocument(currentWorkspace.bytes, sourceIndex, targetIndex),
+    })
+  }
+
+  async function duplicateCurrentPage() {
+    if (!workspace || busy) return
+    const currentWorkspace = workspace
+
+    await runDocumentMutation({
+      workingStatus: `Duplicating page ${currentPage}`,
+      successStatus: `Duplicated page ${currentPage}`,
+      errorStatus: 'Failed to duplicate the current page',
+      nextCurrentPage: currentPage + 1,
+      mutate: () => duplicatePageInDocument(currentWorkspace.bytes, currentPage - 1),
+    })
+  }
+
+  async function deleteCurrentPage() {
+    if (!workspace || busy) return
+    const currentWorkspace = workspace
+
+    await runDocumentMutation({
+      workingStatus: `Deleting page ${currentPage}`,
+      successStatus: `Deleted page ${currentPage}`,
+      errorStatus: 'Failed to delete the current page',
+      nextCurrentPage: Math.min(currentPage, currentWorkspace.pageCount - 1),
+      mutate: () => deletePageFromDocument(currentWorkspace.bytes, currentPage - 1),
+    })
+  }
+
+  async function insertBlankAfterCurrentPage() {
+    if (!workspace || busy) return
+    const currentWorkspace = workspace
+
+    await runDocumentMutation({
+      workingStatus: `Adding blank page after ${currentPage}`,
+      successStatus: `Inserted blank page after ${currentPage}`,
+      errorStatus: 'Failed to insert a blank page',
+      nextCurrentPage: currentPage + 1,
+      mutate: () => insertBlankPageAfterCurrent(currentWorkspace.bytes, currentPage - 1),
+    })
   }
 
   async function extractCurrentPage() {
     if (!workspace || busy) return
+    const currentWorkspace = workspace
+
+    await runDocumentMutation({
+      workingStatus: `Extracting page ${currentPage}`,
+      successStatus: `Extracted page ${currentPage}`,
+      errorStatus: 'Failed to extract the current page',
+      nextCurrentPage: 1,
+      fileName: `${withoutExtension(currentWorkspace.fileName)}-page-${String(currentPage).padStart(3, '0')}.pdf`,
+      mutate: () => extractPagesFromDocument(currentWorkspace.bytes, [currentPage - 1]),
+    })
+  }
+
+  async function extractSelectedRange() {
+    if (!workspace || busy) return
+    const currentWorkspace = workspace
+
+    let pages: number[] = []
+    try {
+      pages = parsePageSelection(rangeExpression, currentWorkspace.pageCount)
+    } catch (error) {
+      reportError(error, 'Invalid page range')
+      return
+    }
+
+    await runDocumentMutation({
+      workingStatus: `Extracting pages ${rangeExpression}`,
+      successStatus: `Extracted pages ${rangeExpression}`,
+      errorStatus: 'Failed to extract the selected range',
+      nextCurrentPage: 1,
+      fileName: `${withoutExtension(currentWorkspace.fileName)}-range.pdf`,
+      mutate: () => extractPagesFromDocument(currentWorkspace.bytes, pages.map((pageNumber) => pageNumber - 1)),
+    })
+  }
+
+  async function splitIntoSinglePageFiles() {
+    if (!workspace || busy) return
+
+    const selection = await openDialog({
+      directory: true,
+      multiple: false,
+      title: 'Choose output folder',
+    })
+    const [directory] = normalizeSelection(selection)
+    if (!directory) return
 
     busy = true
     statusTone = 'busy'
-    status = `Extracting page ${currentPage}`
+    status = `Splitting ${workspace.pageCount} pages`
     lastError = null
 
     try {
-      const { PDFDocument } = await getPdfLib()
-      const source = await PDFDocument.load(workspace.bytes.slice())
-      const extracted = await PDFDocument.create()
-      const [page] = await extracted.copyPages(source, [currentPage - 1])
-      extracted.addPage(page)
+      const segments = await splitDocumentIntoSinglePages(workspace.bytes)
 
-      const bytes = await extracted.save()
-      await commitGeneratedPdf(bytes, {
-        fileName: `${withoutExtension(workspace.fileName)}-page-${String(currentPage).padStart(3, '0')}.pdf`,
-        current: 1,
-      })
+      for (let index = 0; index < segments.length; index += 1) {
+        const fileName = `${withoutExtension(workspace.fileName)}-page-${String(index + 1).padStart(3, '0')}.pdf`
+        await invoke('save_file_bytes', {
+          path: joinPath(directory, fileName),
+          bytes_base64: bytesToBase64(segments[index]),
+        })
+      }
+
       statusTone = 'idle'
-      status = `Extracted page ${currentPage}`
+      status = `Created ${segments.length} single-page PDFs`
     } catch (error) {
-      reportError(error, 'Failed to extract the current page')
+      reportError(error, 'Failed to split the PDF into single pages')
     } finally {
       busy = false
     }
@@ -355,7 +419,7 @@
   }
 
   async function exportCurrentPagePng() {
-    if (!workspace || busy) return
+    if (!workspace || !pdfProxy || busy) return
 
     busy = true
     statusTone = 'busy'
@@ -364,7 +428,7 @@
 
     try {
       const canvas = document.createElement('canvas')
-      await renderPageToCanvas(currentPage, Math.max(zoom, 2), canvas)
+      await renderPdfPageToCanvas(pdfProxy, currentPage, Math.max(zoom, 2), canvas)
       const blob = await canvasToBlob(canvas)
       const targetPath = await saveDialog({
         defaultPath: `${withoutExtension(workspace.fileName)}-page-${String(currentPage).padStart(3, '0')}.png`,
@@ -392,7 +456,7 @@
   }
 
   async function exportAllPagesPng() {
-    if (!workspace || busy) return
+    if (!workspace || !pdfProxy || busy) return
 
     const selection = await openDialog({
       directory: true,
@@ -410,7 +474,7 @@
     try {
       for (let pageNumber = 1; pageNumber <= workspace.pageCount; pageNumber += 1) {
         const canvas = document.createElement('canvas')
-        await renderPageToCanvas(pageNumber, 2, canvas)
+        await renderPdfPageToCanvas(pdfProxy, pageNumber, 2, canvas)
         const blob = await canvasToBlob(canvas)
         const fileName = `${withoutExtension(workspace.fileName)}-page-${String(pageNumber).padStart(3, '0')}.png`
 
@@ -424,6 +488,90 @@
       status = `Exported ${workspace.pageCount} page PNGs`
     } catch (error) {
       reportError(error, 'Failed to export page PNGs')
+    } finally {
+      busy = false
+    }
+  }
+
+  async function exportDocumentTextToFile() {
+    if (!workspace || !pdfProxy || busy) return
+
+    busy = true
+    statusTone = 'busy'
+    status = 'Extracting document text'
+    lastError = null
+
+    try {
+      const text = await extractDocumentText(pdfProxy)
+      const targetPath = await saveDialog({
+        defaultPath: `${withoutExtension(workspace.fileName)}.txt`,
+        filters: [{ name: 'Text file', extensions: ['txt'] }],
+      })
+
+      if (!targetPath) {
+        statusTone = 'idle'
+        status = 'Text export cancelled'
+        return
+      }
+
+      await invoke('save_file_bytes', {
+        path: targetPath,
+        bytes_base64: bytesToBase64(new TextEncoder().encode(text)),
+      })
+
+      statusTone = 'idle'
+      status = `Exported ${fileNameFromPath(targetPath)}`
+    } catch (error) {
+      reportError(error, 'Failed to export document text')
+    } finally {
+      busy = false
+    }
+  }
+
+  async function applyMetadata() {
+    if (!workspace || busy || !metadataDirty) return
+    const currentWorkspace = workspace
+
+    const applied = await runDocumentMutation({
+      workingStatus: 'Applying document metadata',
+      successStatus: 'Updated PDF metadata',
+      errorStatus: 'Failed to update document metadata',
+      nextCurrentPage: currentPage,
+      mutate: () => applyMetadataToDocument(currentWorkspace.bytes, metadataDraft),
+    })
+
+    if (applied) {
+      metadataDirty = false
+    }
+  }
+
+  async function runDocumentMutation(options: {
+    workingStatus: string
+    successStatus: string
+    errorStatus: string
+    nextCurrentPage: number
+    fileName?: string
+    mutate: () => Promise<Uint8Array>
+  }): Promise<boolean> {
+    if (!workspace || busy) return false
+
+    busy = true
+    statusTone = 'busy'
+    status = options.workingStatus
+    lastError = null
+
+    try {
+      const bytes = await options.mutate()
+      await commitGeneratedPdf(bytes, {
+        fileName: options.fileName ?? workspace.fileName,
+        current: options.nextCurrentPage,
+      })
+      statusTone = 'idle'
+      status = options.successStatus
+      return true
+    } catch (error) {
+      reportError(error, options.errorStatus)
+      return false
     } finally {
       busy = false
     }
@@ -454,36 +602,10 @@
   }
 
   async function renderCurrentPage() {
-    if (!workspace || !viewerCanvas) return
-    await renderPageToCanvas(currentPage, zoom, viewerCanvas)
-  }
-
-  async function renderPageToCanvas(pageNumber: number, scale: number, canvas: HTMLCanvasElement) {
-    if (!pdfProxy) return
+    if (!workspace || !viewerCanvas || !pdfProxy) return
 
     const token = ++renderToken
-    const page = await pdfProxy.getPage(pageNumber)
-    const viewport = page.getViewport({ scale })
-    const outputScale = window.devicePixelRatio || 1
-    const context = canvas.getContext('2d')
-
-    if (!context) {
-      throw new Error('Canvas rendering context is unavailable.')
-    }
-
-    canvas.width = Math.floor(viewport.width * outputScale)
-    canvas.height = Math.floor(viewport.height * outputScale)
-    canvas.style.width = `${viewport.width}px`
-    canvas.style.height = `${viewport.height}px`
-
-    await page.render({
-      canvas,
-      canvasContext: context,
-      viewport,
-      transform: outputScale === 1 ? undefined : [outputScale, 0, 0, outputScale, 0, 0],
-    }).promise
-
-    page.cleanup()
+    await renderPdfPageToCanvas(pdfProxy, currentPage, zoom, viewerCanvas)
 
     if (token !== renderToken) {
       return
@@ -540,13 +662,86 @@
     }
 
     currentPage = clamp(options.current ?? 1, 1, nextProxy.numPages)
+    rangeExpression = String(currentPage)
+    thumbnails = []
+    metadataDraft = emptyMetadata()
+    metadataDirty = false
     await tick()
     await renderCurrentPage()
+    void refreshWorkspaceContext(nextProxy, bytes)
   }
 
-  function persistRecentPath(path: string) {
-    recentPaths = [path, ...recentPaths.filter((entry) => entry !== path)].slice(0, 7)
-    localStorage.setItem(RECENTS_KEY, JSON.stringify(recentPaths))
+  async function refreshWorkspaceContext(proxy: PdfProxy, bytes: Uint8Array) {
+    const nextMetadataToken = ++metadataToken
+    const nextThumbnailToken = ++thumbnailToken
+
+    try {
+      const metadata = await readMetadataFromDocument(bytes)
+      if (nextMetadataToken === metadataToken) {
+        metadataDraft = metadata
+        metadataDirty = false
+      }
+    } catch {
+      if (nextMetadataToken === metadataToken) {
+        metadataDraft = emptyMetadata()
+        metadataDirty = false
+      }
+    }
+
+    try {
+      const nextThumbnails = await generatePageThumbnails(proxy)
+      if (nextThumbnailToken === thumbnailToken) {
+        thumbnails = nextThumbnails
+      }
+    } catch {
+      if (nextThumbnailToken === thumbnailToken) {
+        thumbnails = []
+      }
+    }
+  }
+
+  function updateMetadataField(field: keyof PdfMetadataDraft, value: string) {
+    metadataDraft = {
+      ...metadataDraft,
+      [field]: value,
+    }
+    metadataDirty = true
+  }
+
+  function handlePageDragStart(pageNumber: number, event: DragEvent) {
+    dragSourcePage = pageNumber
+    dropTargetPage = null
+    event.dataTransfer?.setData('text/plain', String(pageNumber))
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move'
+    }
+  }
+
+  function handlePageDragEnter(pageNumber: number) {
+    if (dragSourcePage && dragSourcePage !== pageNumber) {
+      dropTargetPage = pageNumber
+    }
+  }
+
+  function handlePageDragOver(event: DragEvent) {
+    event.preventDefault()
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'move'
+    }
+  }
+
+  async function handlePageDrop(pageNumber: number, event: DragEvent) {
+    event.preventDefault()
+    const source = Number(event.dataTransfer?.getData('text/plain') ?? dragSourcePage)
+    clearDragState()
+
+    if (!source || source === pageNumber) return
+    await movePageTo(source, pageNumber)
+  }
+
+  function clearDragState() {
+    dragSourcePage = null
+    dropTargetPage = null
   }
 
   function normalizeSelection(selection: string | string[] | null): string[] {
@@ -595,11 +790,37 @@
         <h2>Session</h2>
         <span class:busy-pill={busy} class="status-pill">{busy ? 'Busy' : 'Ready'}</span>
       </div>
-      <button on:click={openPdfFlow} disabled={busy}>Open PDF</button>
-      <button on:click={mergeAdditionalPdfs} disabled={busy}>Merge PDFs</button>
-      <button on:click={() => saveWorkspace(false)} disabled={busy || !workspace}>Save</button>
-      <button on:click={() => saveWorkspace(true)} disabled={busy || !workspace}>Save As</button>
-      <button on:click={exportAllPagesPng} disabled={busy || !workspace}>Export All Pages PNG</button>
+      <div class="stack-actions">
+        <button on:click={openPdfFlow} disabled={busy}>Open PDF</button>
+        <button on:click={mergeAdditionalPdfs} disabled={busy}>Merge PDFs</button>
+        <button on:click={() => saveWorkspace(false)} disabled={busy || !workspace}>Save</button>
+        <button on:click={() => saveWorkspace(true)} disabled={busy || !workspace}>Save As</button>
+        <button on:click={exportDocumentTextToFile} disabled={busy || !workspace}>Export Text</button>
+      </div>
+    </section>
+
+    <section class="card page-tools">
+      <div class="section-head">
+        <h2>Page Tools</h2>
+        <span>{workspace ? `${workspace.pageCount} pages` : 'Idle'}</span>
+      </div>
+      <label class="field">
+        <span class="field-label">Range</span>
+        <input
+          class="field-input"
+          bind:value={rangeExpression}
+          disabled={!workspace || busy}
+          placeholder="1-3, 5, 8-10"
+        />
+      </label>
+      <div class="tool-grid">
+        <button on:click={extractSelectedRange} disabled={busy || !workspace}>Extract Range</button>
+        <button on:click={splitIntoSinglePageFiles} disabled={busy || !workspace}>Split To Folder</button>
+        <button on:click={duplicateCurrentPage} disabled={busy || !workspace}>Duplicate Page</button>
+        <button on:click={deleteCurrentPage} disabled={busy || !workspace}>Delete Page</button>
+        <button on:click={insertBlankAfterCurrentPage} disabled={busy || !workspace}>Blank After</button>
+        <button on:click={exportAllPagesPng} disabled={busy || !workspace}>All Pages PNG</button>
+      </div>
     </section>
 
     <section class="card recent-list">
@@ -675,24 +896,40 @@
       <section class="card page-strip">
         <div class="section-head">
           <h2>Pages</h2>
-          <span>{workspace ? workspace.pageCount : 0}</span>
+          <span>{workspace ? `${thumbnails.length}/${workspace.pageCount}` : 0} thumbs</span>
         </div>
         {#if workspace}
           <div class="page-list">
             {#each pageItems as pageNumber}
+              {@const thumbnail = thumbnailMap.get(pageNumber)}
               <button
                 class:active={pageNumber === currentPage}
+                class:drag-source={pageNumber === dragSourcePage}
+                class:drop-target={pageNumber === dropTargetPage}
                 class="page-chip"
+                draggable={workspace.pageCount > 1}
                 on:click={() => goToPage(pageNumber)}
+                on:dragstart={(event) => handlePageDragStart(pageNumber, event)}
+                on:dragenter={() => handlePageDragEnter(pageNumber)}
+                on:dragover={handlePageDragOver}
+                on:drop={(event) => handlePageDrop(pageNumber, event)}
+                on:dragend={clearDragState}
                 aria-pressed={pageNumber === currentPage}
               >
-                <span>Page</span>
-                <strong>{pageNumber}</strong>
+                {#if thumbnail}
+                  <img class="page-thumb" src={thumbnail.dataUrl} alt={`Page ${pageNumber}`} />
+                {:else}
+                  <div class="page-thumb placeholder-thumb">Page {pageNumber}</div>
+                {/if}
+                <div class="page-chip-body">
+                  <span>Page {pageNumber}</span>
+                  <strong>{pageNumber === currentPage ? 'Active' : 'Drag to reorder'}</strong>
+                </div>
               </button>
             {/each}
           </div>
         {:else}
-          <p class="muted">Open a PDF to inspect and reorder pages.</p>
+          <p class="muted">Open a PDF to inspect thumbnails and drag pages into a new order.</p>
         {/if}
       </section>
 
@@ -727,18 +964,77 @@
 
         {#if workspace}
           <div class="inspector-block">
-            <span class="meta-label">Name</span>
+            <span class="meta-label">Document</span>
             <strong>{workspace.fileName}</strong>
+            <span class="muted">{workspace.path ?? 'Generated in memory'}</span>
           </div>
+
           <div class="inspector-block">
-            <span class="meta-label">Location</span>
-            <strong>{workspace.path ?? 'Generated in memory'}</strong>
+            <div class="section-head compact-head">
+              <h3>Metadata</h3>
+              <span class:modified-pill={metadataDirty} class="pill">
+                {metadataDirty ? 'Changed' : 'Synced'}
+              </span>
+            </div>
+            <div class="field-grid">
+              <label class="field">
+                <span class="field-label">Title</span>
+                <input
+                  class="field-input"
+                  value={metadataDraft.title}
+                  on:input={(event) => updateMetadataField('title', event.currentTarget.value)}
+                />
+              </label>
+              <label class="field">
+                <span class="field-label">Author</span>
+                <input
+                  class="field-input"
+                  value={metadataDraft.author}
+                  on:input={(event) => updateMetadataField('author', event.currentTarget.value)}
+                />
+              </label>
+              <label class="field">
+                <span class="field-label">Subject</span>
+                <input
+                  class="field-input"
+                  value={metadataDraft.subject}
+                  on:input={(event) => updateMetadataField('subject', event.currentTarget.value)}
+                />
+              </label>
+              <label class="field">
+                <span class="field-label">Keywords</span>
+                <input
+                  class="field-input"
+                  value={metadataDraft.keywords}
+                  on:input={(event) => updateMetadataField('keywords', event.currentTarget.value)}
+                />
+              </label>
+              <label class="field">
+                <span class="field-label">Creator</span>
+                <input
+                  class="field-input"
+                  value={metadataDraft.creator}
+                  on:input={(event) => updateMetadataField('creator', event.currentTarget.value)}
+                />
+              </label>
+              <label class="field">
+                <span class="field-label">Producer</span>
+                <input
+                  class="field-input"
+                  value={metadataDraft.producer}
+                  on:input={(event) => updateMetadataField('producer', event.currentTarget.value)}
+                />
+              </label>
+            </div>
+            <button on:click={applyMetadata} disabled={busy || !metadataDirty}>Apply Metadata</button>
           </div>
+
           <div class="inspector-block">
             <span class="meta-label">Suggested exports</span>
             <div class="export-list">
               <span>{withExtension(workspace.fileName, '.pdf')}</span>
               <span>{withExtension(workspace.fileName, '.png')}</span>
+              <span>{withExtension(workspace.fileName, '.txt')}</span>
               <span>{withExtension(workspace.fileName, '.docx')} planned</span>
             </div>
           </div>
@@ -756,9 +1052,9 @@
             <span class="meta-label">Pipeline status</span>
             <div class="stack-list">
               <span>Viewer: PDF.js</span>
-              <span>Edits: pdf-lib</span>
+              <span>Edits: pdf-lib operation layer</span>
               <span>File IO: Rust + Tauri</span>
-              <span>OCR/Signatures: queued for next milestone</span>
+              <span>OCR and signatures: next local milestone</span>
             </div>
           </div>
         {:else}
@@ -770,7 +1066,7 @@
               {/each}
             </div>
           </div>
-          <p class="muted">Document classification will appear here after a PDF is loaded.</p>
+          <p class="muted">Document classification and metadata editing will appear here after load.</p>
         {/if}
       </section>
     </section>
