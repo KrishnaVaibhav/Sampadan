@@ -14,6 +14,7 @@ The product target is:
 ## Product Principles
 
 - Documents stay on the user's device by default.
+- The PDF viewer should remain the dominant visual surface in the desktop workspace.
 - The UI never performs privileged file IO directly.
 - Heavy PDF work runs outside the main UI thread.
 - Rendering and mutation are separate concerns.
@@ -53,6 +54,7 @@ Path: `apps/desktop/src/`
 Owns:
 
 - application shell
+- viewer-first layout and responsive shell composition
 - toolbar and page controls
 - canvas viewer host
 - user workflow state
@@ -100,7 +102,7 @@ Current commands:
 - `run_ocr_image`
 - `run_ocr_pdf`
 
-The same inspection pass now returns a native trust report with parsed signature details when they are available.
+The same inspection pass now returns a native trust report with parsed signature, attachment, and encryption details when they are available.
 
 ### 4. Document Engine Layer
 
@@ -194,6 +196,8 @@ These are the modules the codebase should grow into instead of adding more logic
   merge, rotate, extract, reorder, split, metadata, and export helpers
 - `src/lib/ocr/ocr-client.ts`
   OCR status probing and native OCR text/PDF invocation bridge
+- `src/App.test.ts`
+  regression suite for critical desktop UI actions and trust/OCR flows
 - `src/lib/conversion/`
   PNG export, image pipelines, later DOCX/HTML export adapters
 - `src/lib/components/`
@@ -273,7 +277,10 @@ Status on March 18, 2026:
 - OCR runtime detection and language listing implemented
 - searchable OCR PDF copy generation implemented
 - native signature/trust report inspection implemented
-- signatures, attachments, and encryption controls still pending
+- native attachment inspection implemented
+- native encryption summary inspection implemented
+- regression tests now cover critical viewer, OCR, trust, edit, and export controls
+- cryptographic signature validation and write-side encryption controls still pending
 
 ### Milestone 4
 

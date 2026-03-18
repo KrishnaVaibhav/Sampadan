@@ -39,7 +39,36 @@ pub struct PdfSignatureSummary {
 pub struct PdfTrustReport {
   pub signature_count: usize,
   pub signatures: Vec<PdfSignatureSummary>,
+  pub attachment_count: usize,
+  pub attachments: Vec<PdfAttachmentSummary>,
+  pub encryption: PdfEncryptionSummary,
   pub recommendations: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfAttachmentSummary {
+  pub file_name: Option<String>,
+  pub description: Option<String>,
+  pub relationship: Option<String>,
+  pub embedded: bool,
+  pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfEncryptionSummary {
+  pub encrypted: bool,
+  pub handler: Option<String>,
+  pub algorithm: Option<String>,
+  pub version: Option<i32>,
+  pub revision: Option<i32>,
+  pub key_length_bits: Option<i32>,
+  pub permissions: Option<i64>,
+  pub stream_filter: Option<String>,
+  pub string_filter: Option<String>,
+  pub encrypt_metadata: Option<bool>,
+  pub notes: Vec<String>,
 }
 
 pub fn extract_pdf_version(bytes: &[u8]) -> String {
@@ -83,6 +112,8 @@ pub fn classify_pdf(bytes: &[u8]) -> PdfFlags {
 
 pub fn build_trust_report(bytes: &[u8], flags: &PdfFlags) -> PdfTrustReport {
   let signatures = extract_signature_summaries(bytes);
+  let attachments = extract_attachment_summaries(bytes);
+  let encryption = build_encryption_summary(bytes, flags);
   let mut recommendations = Vec::new();
 
   if flags.signed && signatures.is_empty() {
@@ -113,18 +144,21 @@ pub fn build_trust_report(bytes: &[u8], flags: &PdfFlags) -> PdfTrustReport {
     );
   }
 
-  if flags.encrypted {
-    recommendations.push(
-      "This PDF is encrypted. Password-aware editing and validation paths may be required."
-        .to_string(),
-    );
-  }
-
-  if flags.has_attachments {
+  if attachments.len() > 0 {
     recommendations.push(
       "This PDF contains embedded attachments. Inspect bundled files before sharing or archiving."
         .to_string(),
     );
+  }
+
+  if encryption.encrypted {
+    let algorithm = encryption
+      .algorithm
+      .clone()
+      .unwrap_or_else(|| "an unspecified security handler".to_string());
+    recommendations.push(format!(
+      "This PDF is encrypted with {algorithm}. Password-aware editing and validation paths may be required."
+    ));
   }
 
   if flags.has_javascript {
@@ -148,6 +182,9 @@ pub fn build_trust_report(bytes: &[u8], flags: &PdfFlags) -> PdfTrustReport {
   PdfTrustReport {
     signature_count: signatures.len(),
     signatures,
+    attachment_count: attachments.len(),
+    attachments,
+    encryption,
     recommendations,
   }
 }
@@ -217,13 +254,13 @@ fn parse_signature_summary(
   }
 
   PdfSignatureSummary {
-    field_name: extract_literal_string_value(context_text, "/T"),
-    signer_name: extract_literal_string_value(dictionary_text, "/Name")
-      .or_else(|| extract_literal_string_value(context_text, "/TU")),
-    reason: extract_literal_string_value(dictionary_text, "/Reason"),
-    location: extract_literal_string_value(dictionary_text, "/Location"),
-    contact_info: extract_literal_string_value(dictionary_text, "/ContactInfo"),
-    modification_time: extract_literal_string_value(dictionary_text, "/M"),
+    field_name: extract_string_value(context_text, "/T"),
+    signer_name: extract_string_value(dictionary_text, "/Name")
+      .or_else(|| extract_string_value(context_text, "/TU")),
+    reason: extract_string_value(dictionary_text, "/Reason"),
+    location: extract_string_value(dictionary_text, "/Location"),
+    contact_info: extract_string_value(dictionary_text, "/ContactInfo"),
+    modification_time: extract_string_value(dictionary_text, "/M"),
     filter: extract_name_value(dictionary_text, "/Filter"),
     sub_filter,
     byte_range,
@@ -232,6 +269,204 @@ fn parse_signature_summary(
     doc_mdp,
     notes,
   }
+}
+
+fn extract_attachment_summaries(bytes: &[u8]) -> Vec<PdfAttachmentSummary> {
+  let mut hint_positions = find_occurrences(bytes, b"/Type /Filespec");
+  if hint_positions.is_empty() {
+    hint_positions = find_occurrences(bytes, b"/Filespec");
+  }
+
+  let mut attachments = Vec::new();
+  let mut seen = HashSet::new();
+
+  for hint in hint_positions {
+    let Some((start, end)) = extract_dictionary_bounds(bytes, hint, 16 * 1024, 128 * 1024) else {
+      continue;
+    };
+
+    if !seen.insert(start) {
+      continue;
+    }
+
+    let dictionary_text = String::from_utf8_lossy(&bytes[start..end]);
+    if !dictionary_text.contains("/Filespec") {
+      continue;
+    }
+
+    let file_name = extract_string_value(&dictionary_text, "/UF")
+      .or_else(|| extract_string_value(&dictionary_text, "/F"));
+    let description = extract_string_value(&dictionary_text, "/Desc");
+    let relationship = extract_name_value(&dictionary_text, "/AFRelationship");
+    let embedded = dictionary_text.contains("/EF");
+
+    if file_name.is_none() && description.is_none() && !embedded {
+      continue;
+    }
+
+    let mut notes = Vec::new();
+    if embedded {
+      notes.push("Embedded file stream reference present".to_string());
+    }
+    if let Some(relationship_value) = relationship.clone() {
+      notes.push(format!("Attachment relationship: {relationship_value}"));
+    }
+
+    attachments.push(PdfAttachmentSummary {
+      file_name,
+      description,
+      relationship,
+      embedded,
+      notes,
+    });
+  }
+
+  attachments
+}
+
+fn build_encryption_summary(bytes: &[u8], flags: &PdfFlags) -> PdfEncryptionSummary {
+  if !flags.encrypted {
+    return PdfEncryptionSummary {
+      encrypted: false,
+      handler: None,
+      algorithm: None,
+      version: None,
+      revision: None,
+      key_length_bits: None,
+      permissions: None,
+      stream_filter: None,
+      string_filter: None,
+      encrypt_metadata: None,
+      notes: Vec::new(),
+    };
+  }
+
+  let dictionary_text = extract_encryption_dictionary(bytes);
+  let handler = dictionary_text
+    .as_deref()
+    .and_then(|dictionary| extract_name_value(dictionary, "/Filter"));
+  let version = dictionary_text
+    .as_deref()
+    .and_then(|dictionary| extract_integer_value(dictionary, "/V"));
+  let revision = dictionary_text
+    .as_deref()
+    .and_then(|dictionary| extract_integer_value(dictionary, "/R"));
+  let key_length_bits = dictionary_text
+    .as_deref()
+    .and_then(|dictionary| extract_integer_value(dictionary, "/Length"));
+  let permissions = dictionary_text
+    .as_deref()
+    .and_then(|dictionary| extract_integer_value(dictionary, "/P"))
+    .map(i64::from);
+  let stream_filter = dictionary_text
+    .as_deref()
+    .and_then(|dictionary| extract_name_value(dictionary, "/StmF"));
+  let string_filter = dictionary_text
+    .as_deref()
+    .and_then(|dictionary| extract_name_value(dictionary, "/StrF"));
+  let encrypt_metadata = dictionary_text
+    .as_deref()
+    .and_then(|dictionary| extract_bool_value(dictionary, "/EncryptMetadata"));
+
+  let algorithm = infer_encryption_algorithm(
+    dictionary_text.as_deref(),
+    revision,
+    key_length_bits,
+    stream_filter.as_deref(),
+    string_filter.as_deref(),
+  );
+
+  let mut notes = Vec::new();
+  if dictionary_text.is_none() {
+    notes.push(
+      "Encryption marker detected, but Sampadan could not isolate the encryption dictionary."
+        .to_string(),
+    );
+  }
+  if encrypt_metadata == Some(false) {
+    notes.push("Metadata is excluded from encryption.".to_string());
+  }
+  if stream_filter.as_deref() == Some("Identity") || string_filter.as_deref() == Some("Identity") {
+    notes.push("Some PDF objects are left unencrypted via Identity filters.".to_string());
+  }
+
+  PdfEncryptionSummary {
+    encrypted: true,
+    handler,
+    algorithm,
+    version,
+    revision,
+    key_length_bits,
+    permissions,
+    stream_filter,
+    string_filter,
+    encrypt_metadata,
+    notes,
+  }
+}
+
+fn extract_encryption_dictionary(bytes: &[u8]) -> Option<String> {
+  let mut hint_positions = find_occurrences(bytes, b"/Filter /Standard");
+  if hint_positions.is_empty() {
+    hint_positions = find_occurrences(bytes, b"/EncryptMetadata");
+  }
+  if hint_positions.is_empty() {
+    hint_positions = find_occurrences(bytes, b"/StmF");
+  }
+  if hint_positions.is_empty() {
+    hint_positions = find_occurrences(bytes, b"/StrF");
+  }
+  if hint_positions.is_empty() {
+    hint_positions = find_occurrences(bytes, b"/CFM /AESV");
+  }
+
+  for hint in hint_positions {
+    let Some((start, end)) = extract_dictionary_bounds(bytes, hint, 24 * 1024, 128 * 1024) else {
+      continue;
+    };
+
+    let dictionary_text = String::from_utf8_lossy(&bytes[start..end]).to_string();
+    if dictionary_text.contains("/Filter /Standard")
+      || dictionary_text.contains("/EncryptMetadata")
+      || dictionary_text.contains("/StmF")
+      || dictionary_text.contains("/StrF")
+      || dictionary_text.contains("/CFM /AESV")
+    {
+      return Some(dictionary_text);
+    }
+  }
+
+  None
+}
+
+fn infer_encryption_algorithm(
+  dictionary_text: Option<&str>,
+  revision: Option<i32>,
+  key_length_bits: Option<i32>,
+  stream_filter: Option<&str>,
+  string_filter: Option<&str>,
+) -> Option<String> {
+  let text = dictionary_text.unwrap_or("");
+  if text.contains("AESV3")
+    || revision.unwrap_or_default() >= 6
+    || key_length_bits.unwrap_or_default() >= 256
+  {
+    return Some("AES-256 standard security".to_string());
+  }
+
+  if text.contains("AESV2")
+    || stream_filter == Some("StdCF")
+    || string_filter == Some("StdCF")
+    || key_length_bits.unwrap_or_default() >= 128
+  {
+    return Some("AES-128 or modern standard security".to_string());
+  }
+
+  if text.contains("/Filter /Standard") {
+    return Some("legacy standard security handler".to_string());
+  }
+
+  None
 }
 
 fn extract_byte_range(text: &str) -> Option<Vec<u64>> {
@@ -274,11 +509,11 @@ fn extract_name_value(text: &str, key: &str) -> Option<String> {
   }
 }
 
-fn extract_literal_string_value(text: &str, key: &str) -> Option<String> {
+fn extract_string_value(text: &str, key: &str) -> Option<String> {
   let tail = find_key_tail(text, key)?;
   let bytes = tail.as_bytes();
   if bytes.first().copied() != Some(b'(') {
-    return None;
+    return extract_hex_string_value(tail);
   }
 
   let mut depth = 1usize;
@@ -319,6 +554,71 @@ fn extract_literal_string_value(text: &str, key: &str) -> Option<String> {
   }
 
   None
+}
+
+fn extract_hex_string_value(text: &str) -> Option<String> {
+  let bytes = text.as_bytes();
+  if bytes.first().copied() != Some(b'<') || bytes.get(1).copied() == Some(b'<') {
+    return None;
+  }
+
+  let end = text.find('>')?;
+  let raw = text[1..end]
+    .chars()
+    .filter(|character| !character.is_whitespace())
+    .collect::<String>();
+
+  if raw.is_empty() {
+    return None;
+  }
+
+  let mut normalized = raw;
+  if normalized.len() % 2 == 1 {
+    normalized.push('0');
+  }
+
+  let mut decoded = Vec::new();
+  let mut index = 0usize;
+  while index + 1 < normalized.len() {
+    let byte = u8::from_str_radix(&normalized[index..index + 2], 16).ok()?;
+    decoded.push(byte);
+    index += 2;
+  }
+
+  if decoded.starts_with(&[0xFE, 0xFF]) && decoded.len() >= 4 {
+    let utf16 = decoded[2..]
+      .chunks_exact(2)
+      .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+      .collect::<Vec<_>>();
+    return String::from_utf16(&utf16).ok().map(|value| value.trim().to_string());
+  }
+
+  String::from_utf8(decoded).ok().map(|value| value.trim().to_string())
+}
+
+fn extract_integer_value(text: &str, key: &str) -> Option<i32> {
+  let tail = find_key_tail(text, key)?;
+  let token = tail
+    .chars()
+    .take_while(|character| character.is_ascii_digit() || *character == '-')
+    .collect::<String>();
+
+  if token.is_empty() {
+    None
+  } else {
+    token.parse::<i32>().ok()
+  }
+}
+
+fn extract_bool_value(text: &str, key: &str) -> Option<bool> {
+  let tail = find_key_tail(text, key)?;
+  if tail.starts_with("true") {
+    Some(true)
+  } else if tail.starts_with("false") {
+    Some(false)
+  } else {
+    None
+  }
 }
 
 fn find_key_tail<'a>(text: &'a str, key: &str) -> Option<&'a str> {
@@ -466,8 +766,9 @@ fn count_occurrences(text: &str, needles: &[&str]) -> usize {
 #[cfg(test)]
 mod tests {
   use super::{
-    build_trust_report, classify_pdf, decode_pdf_literal_string, extract_byte_range,
-    extract_literal_string_value, extract_name_value, find_occurrences,
+    build_trust_report, classify_pdf, decode_pdf_literal_string, extract_bool_value,
+    extract_byte_range, extract_integer_value, extract_name_value, extract_string_value,
+    find_occurrences, infer_encryption_algorithm,
   };
 
   #[test]
@@ -475,9 +776,9 @@ mod tests {
     let dictionary = "<< /Type /Sig /T (Signature 1) /Filter /Adobe.PPKLite /Reason (Approved\\) copy) >>";
 
     assert_eq!(extract_name_value(dictionary, "/Filter").as_deref(), Some("Adobe.PPKLite"));
-    assert_eq!(extract_literal_string_value(dictionary, "/T").as_deref(), Some("Signature 1"));
+    assert_eq!(extract_string_value(dictionary, "/T").as_deref(), Some("Signature 1"));
     assert_eq!(
-      extract_literal_string_value(dictionary, "/Reason").as_deref(),
+      extract_string_value(dictionary, "/Reason").as_deref(),
       Some("Approved) copy")
     );
   }
@@ -526,5 +827,64 @@ endobj
     assert_eq!(report.signatures[0].signer_name.as_deref(), Some("Krishna Vaibhav"));
     assert_eq!(report.signatures[0].sub_filter.as_deref(), Some("adbe.pkcs7.detached"));
     assert!(report.signatures[0].doc_mdp);
+  }
+
+  #[test]
+  fn trust_report_extracts_attachments_and_encryption() {
+    let bytes = br#"%PDF-1.7
+1 0 obj
+<<
+/Type /Filespec
+/F (report.xlsx)
+/UF <FEFF007200650070006F00720074002E0078006C00730078>
+/Desc (Quarterly workbook)
+/AFRelationship /Data
+/EF << /F 7 0 R >>
+>>
+endobj
+2 0 obj
+<<
+/Filter /Standard
+/V 5
+/R 6
+/Length 256
+/P -4
+/StmF /StdCF
+/StrF /StdCF
+/EncryptMetadata false
+/CF << /StdCF << /CFM /AESV3 >> >>
+>>
+endobj
+/Encrypt 2 0 R
+"#;
+
+    let flags = classify_pdf(bytes);
+    let report = build_trust_report(bytes, &flags);
+
+    assert_eq!(report.attachment_count, 1);
+    assert_eq!(report.attachments[0].file_name.as_deref(), Some("report.xlsx"));
+    assert!(report.attachments[0].embedded);
+    assert!(report.encryption.encrypted);
+    assert_eq!(report.encryption.revision, Some(6));
+    assert_eq!(
+      report.encryption.algorithm.as_deref(),
+      Some("AES-256 standard security")
+    );
+  }
+
+  #[test]
+  fn extract_integer_and_bool_values_work() {
+    let dictionary = "<< /Length 256 /EncryptMetadata false >>";
+
+    assert_eq!(extract_integer_value(dictionary, "/Length"), Some(256));
+    assert_eq!(extract_bool_value(dictionary, "/EncryptMetadata"), Some(false));
+  }
+
+  #[test]
+  fn infer_encryption_algorithm_prefers_aes256() {
+    assert_eq!(
+      infer_encryption_algorithm(Some("<< /CFM /AESV3 >>"), Some(6), Some(256), None, None).as_deref(),
+      Some("AES-256 standard security")
+    );
   }
 }

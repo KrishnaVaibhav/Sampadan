@@ -63,31 +63,6 @@
     producer: '',
   })
 
-  const roadmap = [
-    {
-      title: 'Live Local Operations',
-      items: [
-        'Open, save, merge, and inspect PDFs',
-        'Rotate, drag reorder, duplicate, delete, and insert blank pages',
-        'Extract current pages and custom page ranges',
-        'Split documents into single-page PDFs',
-        'Export page PNGs and full-document text',
-        'Run local OCR on the current page or full document',
-        'Create searchable OCR PDF copies',
-        'Inspect PDF signature and trust signals',
-      ],
-    },
-    {
-      title: 'Queued Next',
-      items: [
-        'Annotations and comments',
-        'AcroForm editing',
-        'Cryptographic signature validation',
-        'Encryption controls',
-      ],
-    },
-  ]
-
   let viewerCanvas: HTMLCanvasElement | null = null
   let viewerPane: HTMLDivElement | null = null
   let pdfProxy: PdfProxy | null = null
@@ -120,6 +95,8 @@
   $: ocrAvailableLanguages = ocrStatus?.languages ?? []
   $: ocrReady = ocrStatus?.available ?? false
   $: signatureSummaries = workspace?.trustReport.signatures ?? []
+  $: attachmentSummaries = workspace?.trustReport.attachments ?? []
+  $: encryptionSummary = workspace?.trustReport.encryption ?? null
   $: trustRecommendations = workspace?.trustReport.recommendations ?? []
   $: inspectorFlags = workspace
     ? [
@@ -1074,93 +1051,80 @@
 
 <div class="shell">
   <aside class="rail">
-    <div class="brand card">
+    <div class="brand card compact-card">
       <span class="eyebrow">Private Local PDF Workstation</span>
       <h1>Sampadan</h1>
       <p>
-        Native cross-platform PDF tooling built for local editing, restructuring, export, OCR,
-        and signing workflows without sending documents to a server.
+        Viewer-first local PDF tooling. The document stays on-device while edits, OCR, and trust
+        inspection stay available from the side dock.
       </p>
     </div>
 
-    <section class="card actions">
+    <section class="card actions compact-card">
       <div class="section-head">
         <h2>Session</h2>
         <span class:busy-pill={busy} class="status-pill">{busy ? 'Busy' : 'Ready'}</span>
       </div>
       <div class="stack-actions">
-        <button on:click={openPdfFlow} disabled={busy}>Open PDF</button>
+        <button data-testid="open-pdf-button" on:click={openPdfFlow} disabled={busy}>Open PDF</button>
         <button on:click={mergeAdditionalPdfs} disabled={busy}>Merge PDFs</button>
-        <button on:click={() => saveWorkspace(false)} disabled={busy || !workspace}>Save</button>
+        <button data-testid="save-pdf-button" on:click={() => saveWorkspace(false)} disabled={busy || !workspace}>Save</button>
         <button on:click={() => saveWorkspace(true)} disabled={busy || !workspace}>Save As</button>
         <button on:click={exportDocumentTextToFile} disabled={busy || !workspace}>Export Text</button>
         <button on:click={exportTrustReport} disabled={busy || !workspace}>Export Trust Report</button>
       </div>
     </section>
 
-    <section class="card page-tools">
-      <div class="section-head">
-        <h2>Page Tools</h2>
-        <span>{workspace ? `${workspace.pageCount} pages` : 'Idle'}</span>
-      </div>
-      <label class="field">
-        <span class="field-label">Range</span>
-        <input
-          class="field-input"
-          bind:value={rangeExpression}
-          disabled={!workspace || busy}
-          placeholder="1-3, 5, 8-10"
-        />
-      </label>
-      <div class="tool-grid">
-        <button on:click={extractSelectedRange} disabled={busy || !workspace}>Extract Range</button>
-        <button on:click={splitIntoSinglePageFiles} disabled={busy || !workspace}>Split To Folder</button>
-        <button on:click={duplicateCurrentPage} disabled={busy || !workspace}>Duplicate Page</button>
-        <button on:click={deleteCurrentPage} disabled={busy || !workspace}>Delete Page</button>
-        <button on:click={insertBlankAfterCurrentPage} disabled={busy || !workspace}>Blank After</button>
-        <button on:click={exportAllPagesPng} disabled={busy || !workspace}>All Pages PNG</button>
-      </div>
-    </section>
-
-    <section class="card recent-list">
-      <div class="section-head">
-        <h2>Recent Files</h2>
-        <span>{recentPaths.length}</span>
-      </div>
-      {#if recentPaths.length > 0}
-        {#each recentPaths as path}
-          <button class="recent-entry" on:click={() => openPdfByPath(path)} disabled={busy}>
-            <strong>{fileNameFromPath(path)}</strong>
-            <span>{path}</span>
-          </button>
-        {/each}
-      {:else}
-        <p class="muted">Recent files will appear here after your first local session.</p>
-      {/if}
-    </section>
-
-    <section class="card roadmap">
-      <div class="section-head">
-        <h2>Build Lanes</h2>
-        <span>Roadmap</span>
-      </div>
-      {#each roadmap as lane}
-        <div class="roadmap-lane">
-          <h3>{lane.title}</h3>
-          <ul>
-            {#each lane.items as item}
-              <li>{item}</li>
-            {/each}
-          </ul>
+    <details class="card dock-panel page-tools" open>
+      <summary class="dock-summary">
+        <span>Document Tools</span>
+        <small>{workspace ? `${workspace.pageCount} pages` : 'Idle'}</small>
+      </summary>
+      <div class="dock-body">
+        <label class="field">
+          <span class="field-label">Range</span>
+          <input
+            class="field-input"
+            bind:value={rangeExpression}
+            disabled={!workspace || busy}
+            placeholder="1-3, 5, 8-10"
+          />
+        </label>
+        <div class="tool-grid">
+          <button on:click={extractSelectedRange} disabled={busy || !workspace}>Extract Range</button>
+          <button on:click={splitIntoSinglePageFiles} disabled={busy || !workspace}>Split To Folder</button>
+          <button on:click={duplicateCurrentPage} disabled={busy || !workspace}>Duplicate Page</button>
+          <button on:click={deleteCurrentPage} disabled={busy || !workspace}>Delete Page</button>
+          <button on:click={insertBlankAfterCurrentPage} disabled={busy || !workspace}>Blank After</button>
+          <button on:click={exportAllPagesPng} disabled={busy || !workspace}>All Pages PNG</button>
         </div>
-      {/each}
-    </section>
+      </div>
+    </details>
+
+    <details class="card dock-panel recent-list">
+      <summary class="dock-summary">
+        <span>Recent Files</span>
+        <small>{recentPaths.length}</small>
+      </summary>
+      <div class="dock-body">
+        {#if recentPaths.length > 0}
+          {#each recentPaths as path}
+            <button class="recent-entry" on:click={() => openPdfByPath(path)} disabled={busy}>
+              <strong>{fileNameFromPath(path)}</strong>
+              <span>{path}</span>
+            </button>
+          {/each}
+        {:else}
+          <p class="muted">Recent files will appear here after your first local session.</p>
+        {/if}
+      </div>
+    </details>
   </aside>
 
   <main class="workspace">
-    <header class="topbar card">
+    <header class="topbar card compact-card">
       <div>
-        <span class="eyebrow">Current Document</span>
+        <span class="eyebrow">Viewer Focus</span>
         <h2>{workspace ? workspace.fileName : 'No PDF loaded'}</h2>
       </div>
       <div class="topbar-pills">
@@ -1176,7 +1140,7 @@
       </div>
     </header>
 
-    <section class="toolbar card">
+    <section class="toolbar card compact-card">
       <button on:click={() => goToPage(currentPage - 1)} disabled={busy || !workspace}>Prev</button>
       <button on:click={() => goToPage(currentPage + 1)} disabled={busy || !workspace}>Next</button>
       <button on:click={() => zoomBy(-0.15)} disabled={busy || !workspace}>-</button>
@@ -1191,11 +1155,11 @@
       <button on:click={exportCurrentPagePng} disabled={busy || !workspace}>Export PNG</button>
     </section>
 
-    <section class="workspace-grid">
-      <section class="card page-strip">
+    <section class="viewer-stage">
+      <section class="card page-strip compact-card">
         <div class="section-head">
           <h2>Pages</h2>
-          <span>{workspace ? `${thumbnails.length}/${workspace.pageCount}` : 0} thumbs</span>
+          <span>{workspace ? thumbnails.length : 0}</span>
         </div>
         {#if workspace}
           <div class="page-list">
@@ -1232,10 +1196,10 @@
         {/if}
       </section>
 
-      <section class="card viewer-shell">
+      <section class="card viewer-shell hero-viewer" data-testid="viewer-shell">
         <div class="section-head">
           <h2>Viewer</h2>
-          <span>{workspace ? `Page ${currentPage}` : 'Idle'}</span>
+          <span>{workspace ? `Page ${currentPage} of ${workspace.pageCount}` : 'Idle'}</span>
         </div>
 
         {#if workspace}
@@ -1254,13 +1218,14 @@
           </div>
         {/if}
       </section>
+    </section>
 
-      <section class="card inspector">
-        <div class="section-head">
-          <h2>Inspector</h2>
-          <span>{workspace ? workspace.source : 'No file'}</span>
-        </div>
-
+    <details class="card utility-panel inspector-panel" open={Boolean(workspace && (workspace.flags.signed || workspace.flags.encrypted || workspace.flags.hasAttachments))}>
+      <summary class="dock-summary">
+        <span>Inspector</span>
+        <small>{workspace ? workspace.source : 'No file'}</small>
+      </summary>
+      <div class="dock-body inspector">
         {#if workspace}
           <div class="inspector-block">
             <span class="meta-label">Document</span>
@@ -1340,6 +1305,7 @@
               <span>{withExtension(workspace.fileName, '.docx')} planned</span>
             </div>
           </div>
+
           <div class="inspector-block">
             <span class="meta-label">Signals</span>
             <div class="flag-grid">
@@ -1350,6 +1316,7 @@
               {/each}
             </div>
           </div>
+
           <div class="inspector-block">
             <span class="meta-label">Trust Report</span>
             <strong>
@@ -1365,6 +1332,65 @@
               {/each}
             </div>
           </div>
+
+          {#if encryptionSummary?.encrypted}
+            <div class="inspector-block">
+              <span class="meta-label">Encryption</span>
+              <strong>{encryptionSummary.algorithm ?? 'Encrypted PDF'}</strong>
+              <div class="stack-list">
+                {#if encryptionSummary.handler}
+                  <span>Handler: {encryptionSummary.handler}</span>
+                {/if}
+                {#if encryptionSummary.version !== null}
+                  <span>V: {encryptionSummary.version}</span>
+                {/if}
+                {#if encryptionSummary.revision !== null}
+                  <span>R: {encryptionSummary.revision}</span>
+                {/if}
+                {#if encryptionSummary.keyLengthBits !== null}
+                  <span>Key length: {encryptionSummary.keyLengthBits} bits</span>
+                {/if}
+                {#if encryptionSummary.permissions !== null}
+                  <span>Permissions: {encryptionSummary.permissions}</span>
+                {/if}
+                {#if encryptionSummary.streamFilter}
+                  <span>Stream filter: {encryptionSummary.streamFilter}</span>
+                {/if}
+                {#if encryptionSummary.stringFilter}
+                  <span>String filter: {encryptionSummary.stringFilter}</span>
+                {/if}
+                {#if encryptionSummary.encryptMetadata !== null}
+                  <span>Encrypt metadata: {encryptionSummary.encryptMetadata ? 'yes' : 'no'}</span>
+                {/if}
+                {#each encryptionSummary.notes as note}
+                  <span>{note}</span>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
+          {#if attachmentSummaries.length > 0}
+            <div class="inspector-block">
+              <span class="meta-label">Attachments</span>
+              <strong>{attachmentSummaries.length} embedded file{attachmentSummaries.length === 1 ? '' : 's'}</strong>
+              {#each attachmentSummaries as attachment}
+                <div class="stack-list attachment-entry">
+                  <span>{attachment.fileName ?? 'Unnamed attachment'}</span>
+                  {#if attachment.description}
+                    <span>Description: {attachment.description}</span>
+                  {/if}
+                  {#if attachment.relationship}
+                    <span>Relationship: {attachment.relationship}</span>
+                  {/if}
+                  <span>{attachment.embedded ? 'Embedded file stream present' : 'Reference only'}</span>
+                  {#each attachment.notes as note}
+                    <span>{note}</span>
+                  {/each}
+                </div>
+              {/each}
+            </div>
+          {/if}
+
           {#if signatureSummaries.length > 0}
             {#each signatureSummaries as signature, index}
               <div class="inspector-block">
@@ -1411,6 +1437,7 @@
               </div>
             {/each}
           {/if}
+
           <div class="inspector-block">
             <span class="meta-label">Pipeline status</span>
             <div class="stack-list">
@@ -1419,7 +1446,7 @@
               <span>File IO: Rust + Tauri</span>
               <span>OCR: {ocrReady ? `Tesseract ${ocrStatus?.version ?? 'ready'}` : 'Install local Tesseract'}</span>
               <span>Searchable OCR PDF: local generated copy</span>
-              <span>Signatures: native trust report and export</span>
+              <span>Trust: signatures, attachments, and encryption summary</span>
             </div>
           </div>
         {:else}
@@ -1433,21 +1460,15 @@
           </div>
           <p class="muted">Document classification and metadata editing will appear here after load.</p>
         {/if}
-      </section>
-    </section>
-
-    <section class="card ocr-panel">
-      <div class="section-head">
-        <div>
-          <span class="eyebrow">Local OCR</span>
-          <h2>OCR Workbench</h2>
-        </div>
-        <span class:busy-pill={busy && (status.includes('OCR') || status.includes('searchable'))} class="status-pill">
-          {ocrReady ? 'Ready' : 'Unavailable'}
-        </span>
       </div>
+    </details>
 
-      <div class="ocr-layout">
+    <details class="card utility-panel ocr-panel">
+      <summary class="dock-summary">
+        <span>OCR Workbench</span>
+        <small>{ocrReady ? 'Ready' : 'Unavailable'}</small>
+      </summary>
+      <div class="dock-body ocr-layout">
         <div class="ocr-controls">
           <p class="muted">
             OCR stays on-device. Sampadan renders pages locally, sends page images to a local
@@ -1490,9 +1511,9 @@
 
           <div class="tool-grid ocr-actions">
             <button on:click={refreshOcrStatus} disabled={busy}>Refresh OCR</button>
-            <button on:click={ocrCurrentPage} disabled={busy || !workspace || !ocrReady}>OCR Page</button>
+            <button data-testid="ocr-page-button" on:click={ocrCurrentPage} disabled={busy || !workspace || !ocrReady}>OCR Page</button>
             <button on:click={ocrWholeDocument} disabled={busy || !workspace || !ocrReady}>OCR Document</button>
-            <button on:click={createSearchableCopy} disabled={busy || !workspace || !ocrReady}>
+            <button data-testid="searchable-pdf-button" on:click={createSearchableCopy} disabled={busy || !workspace || !ocrReady}>
               Searchable PDF
             </button>
             <button on:click={exportOcrPreviewToFile} disabled={busy || !workspace || !ocrPreview}>
@@ -1519,7 +1540,7 @@
           ></textarea>
         </div>
       </div>
-    </section>
+    </details>
 
     {#if lastError}
       <section class="card error-panel">

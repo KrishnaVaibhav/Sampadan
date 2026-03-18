@@ -15,6 +15,7 @@ Working desktop foundation.
 Current local features include:
 
 - open, save, and merge PDFs
+- viewer-first desktop layout with the PDF canvas as the primary workspace
 - page thumbnails and drag reordering
 - rotate, duplicate, delete, and insert blank pages
 - extract current pages and custom page ranges
@@ -22,7 +23,7 @@ Current local features include:
 - export page PNGs and document text
 - run local OCR on the current page or a full document when Tesseract is installed
 - create searchable OCR PDF copies locally
-- inspect PDF signature and trust signals
+- inspect PDF signatures, attachments, and encryption signals
 - metadata inspection and editing
 
 ## Architecture
@@ -37,6 +38,7 @@ Desktop app commands live in `apps/desktop`.
 cd apps/desktop
 npm ci
 npm run check
+npm test
 npm run tauri:dev
 ```
 

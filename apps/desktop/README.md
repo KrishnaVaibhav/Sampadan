@@ -13,13 +13,14 @@ This package contains the local-first desktop application for Sampadan.
 ## Current Capabilities
 
 - open, save, and merge PDFs
+- viewer-first workspace with the PDF canvas as the dominant surface
 - rotate, reorder, duplicate, delete, and insert blank pages
 - extract page ranges and split documents into single-page files
 - export page PNGs and document text
 - edit PDF metadata
 - run local OCR through Tesseract when available on the device
 - create searchable OCR PDF copies from scanned pages
-- inspect signature and trust metadata with local report export
+- inspect signature, attachment, and encryption trust metadata with local report export
 
 ## Development
 
@@ -27,6 +28,7 @@ This package contains the local-first desktop application for Sampadan.
 cd apps/desktop
 npm ci
 npm run check
+npm test
 npm run tauri:dev
 ```
 

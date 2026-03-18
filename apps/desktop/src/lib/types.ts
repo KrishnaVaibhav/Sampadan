@@ -27,9 +27,34 @@ export interface PdfSignatureSummary {
   notes: string[]
 }
 
+export interface PdfAttachmentSummary {
+  fileName: string | null
+  description: string | null
+  relationship: string | null
+  embedded: boolean
+  notes: string[]
+}
+
+export interface PdfEncryptionSummary {
+  encrypted: boolean
+  handler: string | null
+  algorithm: string | null
+  version: number | null
+  revision: number | null
+  keyLengthBits: number | null
+  permissions: number | null
+  streamFilter: string | null
+  stringFilter: string | null
+  encryptMetadata: boolean | null
+  notes: string[]
+}
+
 export interface PdfTrustReport {
   signatureCount: number
   signatures: PdfSignatureSummary[]
+  attachmentCount: number
+  attachments: PdfAttachmentSummary[]
+  encryption: PdfEncryptionSummary
   recommendations: string[]
 }
 
