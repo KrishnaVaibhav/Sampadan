@@ -204,15 +204,19 @@ describe('real PDF workflow actions', () => {
 
   test('button flows mutate and export real PDF bytes without throwing', async () => {
     const sourcePath = 'C:/docs/workflow.pdf'
+    const insertPath = 'C:/docs/insert-source.pdf'
     const mergePath = 'C:/docs/merge-source.pdf'
     const sourceBytes = await createSamplePdf(3)
+    const insertBytes = await createSamplePdf(1)
     const mergeBytes = await createSamplePdf(2)
     const diskFiles = new Map<string, Uint8Array>([
       [sourcePath, sourceBytes],
+      [insertPath, insertBytes],
       [mergePath, mergeBytes],
     ])
     let currentBytes = sourceBytes
     let directorySelectionIndex = 0
+    const openSelections = [sourcePath, sourcePath, sourcePath, insertPath]
 
     invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
       switch (command) {
@@ -267,7 +271,7 @@ describe('real PDF workflow actions', () => {
         return [mergePath]
       }
 
-      return sourcePath
+      return openSelections.shift() ?? sourcePath
     })
     saveDialogMock
       .mockResolvedValueOnce('C:/docs/workflow-edited.pdf')
@@ -321,6 +325,23 @@ describe('real PDF workflow actions', () => {
       expect(screen.getByText('1/3 pages')).toBeTruthy()
     })
 
+    await user.click(screen.getByRole('button', { name: 'Insert PDF After' }))
+    await waitFor(() => {
+      expect(screen.getByText('2/4 pages')).toBeTruthy()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Apply Watermark' }))
+    await waitFor(() => {
+      expect(screen.getByText('Applied watermark to page 2')).toBeTruthy()
+    })
+
+    await user.clear(screen.getByLabelText('Starting Number'))
+    await user.type(screen.getByLabelText('Starting Number'), '10')
+    await user.click(screen.getByRole('button', { name: 'Add Page Numbers' }))
+    await waitFor(() => {
+      expect(screen.getByText('Added page numbers to page 2')).toBeTruthy()
+    })
+
     const titleInput = screen.getByLabelText('Title')
     await user.clear(titleInput)
     await user.type(titleInput, 'Workflow Edited')
@@ -336,7 +357,7 @@ describe('real PDF workflow actions', () => {
 
     await user.click(screen.getByRole('button', { name: 'Merge PDFs' }))
     await waitFor(() => {
-      expect(screen.getByText('1/5 pages')).toBeTruthy()
+      expect(screen.getByText('2/6 pages')).toBeTruthy()
     })
 
     await user.click(screen.getByRole('button', { name: 'Save As' }))
@@ -353,19 +374,19 @@ describe('real PDF workflow actions', () => {
     await user.click(screen.getByRole('button', { name: 'All Pages PNG' }))
     await waitFor(() => {
       const saveCalls = invokeMock.mock.calls.filter(([command]) => command === 'save_file_bytes')
-      expect(saveCalls.length).toBe(8)
+      expect(saveCalls.length).toBe(9)
     })
 
     await user.click(screen.getByRole('button', { name: 'Split To Folder' }))
     await waitFor(() => {
       const saveCalls = invokeMock.mock.calls.filter(([command]) => command === 'save_file_bytes')
-      expect(saveCalls.length).toBe(13)
+      expect(saveCalls.length).toBe(15)
     })
 
     await user.click(screen.getByRole('button', { name: 'Export Text' }))
     await waitFor(() => {
       const saveCalls = invokeMock.mock.calls.filter(([command]) => command === 'save_file_bytes')
-      expect(saveCalls.length).toBe(14)
+      expect(saveCalls.length).toBe(16)
     })
 
     await user.click(screen.getByRole('button', { name: 'Export Trust Report' }))
@@ -374,8 +395,8 @@ describe('real PDF workflow actions', () => {
       const inspectCalls = invokeMock.mock.calls.filter(([command]) => command === 'inspect_pdf_bytes')
       const saveCalls = invokeMock.mock.calls.filter(([command]) => command === 'save_file_bytes')
 
-      expect(inspectCalls.length).toBeGreaterThanOrEqual(7)
-      expect(saveCalls.length).toBe(15)
+      expect(inspectCalls.length).toBeGreaterThanOrEqual(10)
+      expect(saveCalls.length).toBe(17)
     })
 
     expectCamelCasePayloadKeys(getInvokePayloads('inspect_pdf_bytes'), ['fileName', 'bytesBase64'])
@@ -383,9 +404,9 @@ describe('real PDF workflow actions', () => {
 
     const savedEditedSummary = await readPdfSummary(diskFiles.get('C:/docs/workflow-edited.pdf')!)
     expect(savedEditedSummary.title).toBe('Workflow Edited')
-    expect(savedEditedSummary.pageCount).toBe(3)
+    expect(savedEditedSummary.pageCount).toBe(4)
 
     const savedMergedSummary = await readPdfSummary(diskFiles.get('C:/docs/workflow-merged-copy.pdf')!)
-    expect(savedMergedSummary.pageCount).toBe(5)
+    expect(savedMergedSummary.pageCount).toBe(6)
   })
 })

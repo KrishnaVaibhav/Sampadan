@@ -54,6 +54,7 @@ vi.mock('./lib/viewer/pdf-viewer', () => ({
 
 vi.mock('./lib/operations/pdf-document', () => ({
   mergeDocuments: vi.fn(async () => Uint8Array.from([9, 9, 9, 9])),
+  insertDocumentAfterPage: vi.fn(async () => Uint8Array.from([8, 8, 8, 8])),
   rotatePageInDocument: vi.fn(async () => Uint8Array.from([1, 2, 3])),
   movePageInDocument: vi.fn(async () => Uint8Array.from([1, 2, 3])),
   extractPagesFromDocument: vi.fn(async () => Uint8Array.from([1, 2, 3])),
@@ -61,6 +62,8 @@ vi.mock('./lib/operations/pdf-document', () => ({
   duplicatePageInDocument: vi.fn(async () => Uint8Array.from([1, 2, 3])),
   insertBlankPageAfterCurrent: vi.fn(async () => Uint8Array.from([1, 2, 3])),
   splitDocumentIntoSinglePages: vi.fn(async () => [Uint8Array.from([1]), Uint8Array.from([2])]),
+  addTextWatermarkToDocument: vi.fn(async () => Uint8Array.from([4, 4, 4])),
+  addPageNumbersToDocument: vi.fn(async () => Uint8Array.from([5, 5, 5])),
   readMetadataFromDocument: vi.fn(async () => ({
     title: 'Sample PDF',
     author: 'Krishna Vaibhav',
@@ -262,6 +265,7 @@ describe('Sampadan desktop app regression suite', () => {
       'Export Trust Report',
       'Extract Range',
       'Split To Folder',
+      'Insert PDF After',
       'Duplicate Page',
       'Delete Page',
       'Blank After',
@@ -273,6 +277,8 @@ describe('Sampadan desktop app regression suite', () => {
       'Move Right',
       'Extract Page',
       'Export PNG',
+      'Apply Watermark',
+      'Add Page Numbers',
     ]) {
       expect((screen.getByRole('button', { name: label }) as HTMLButtonElement).disabled).toBe(false)
     }
@@ -401,6 +407,7 @@ describe('Sampadan desktop app regression suite', () => {
   test('runs structural edit and export buttons through the local pipelines', async () => {
     openDialogMock
       .mockResolvedValueOnce('C:/docs/sample.pdf')
+      .mockResolvedValueOnce('C:/docs/insert-source.pdf')
       .mockResolvedValueOnce('C:/exports/page-pngs')
       .mockResolvedValueOnce('C:/exports/split-pages')
     saveDialogMock
@@ -420,6 +427,7 @@ describe('Sampadan desktop app regression suite', () => {
     await user.click(screen.getByRole('button', { name: 'Move Right' }))
     await user.click(screen.getByRole('button', { name: 'Extract Page' }))
     await user.click(screen.getByRole('button', { name: 'Extract Range' }))
+    await user.click(screen.getByRole('button', { name: 'Insert PDF After' }))
     await user.click(screen.getByRole('button', { name: 'Duplicate Page' }))
     await user.click(screen.getByRole('button', { name: 'Delete Page' }))
     await user.click(screen.getByRole('button', { name: 'Blank After' }))
@@ -428,6 +436,8 @@ describe('Sampadan desktop app regression suite', () => {
     await user.clear(titleInput)
     await user.type(titleInput, 'Viewer First Regression')
     await user.click(screen.getByRole('button', { name: 'Apply Metadata' }))
+    await user.click(screen.getByRole('button', { name: 'Apply Watermark' }))
+    await user.click(screen.getByRole('button', { name: 'Add Page Numbers' }))
 
     await user.click(screen.getByRole('button', { name: 'Export PNG' }))
     await user.click(screen.getByRole('button', { name: 'Export Text' }))

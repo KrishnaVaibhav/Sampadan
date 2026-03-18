@@ -6,17 +6,21 @@
   import { fetchOcrStatus, runOcrForBlob, runOcrPdfForBlob } from './lib/ocr/ocr-client'
   import { type PdfProxy, loadPdfProxy } from './lib/pdf-engine'
   import {
+    addPageNumbersToDocument,
+    addTextWatermarkToDocument,
     applyMetadataToDocument,
     deletePageFromDocument,
     duplicatePageInDocument,
     extractPagesFromDocument,
     insertBlankPageAfterCurrent,
+    insertDocumentAfterPage,
     mergeDocuments,
     movePageInDocument,
     readMetadataFromDocument,
     rotatePageInDocument,
     splitDocumentIntoSinglePages,
   } from './lib/operations/pdf-document'
+  import type { PageNumberPosition, WatermarkPosition } from './lib/operations/pdf-document'
   import {
     base64ToBytes,
     blobToBase64,
@@ -63,6 +67,28 @@
     producer: '',
   })
 
+  const editScopeOptions = [
+    { value: 'current', label: 'Current page' },
+    { value: 'all', label: 'All pages' },
+  ] as const
+
+  const watermarkPositionOptions: Array<{ value: WatermarkPosition; label: string }> = [
+    { value: 'center', label: 'Center' },
+    { value: 'top-left', label: 'Top left' },
+    { value: 'top-right', label: 'Top right' },
+    { value: 'bottom-left', label: 'Bottom left' },
+    { value: 'bottom-right', label: 'Bottom right' },
+  ]
+
+  const pageNumberPositionOptions: Array<{ value: PageNumberPosition; label: string }> = [
+    { value: 'footer-center', label: 'Footer center' },
+    { value: 'footer-right', label: 'Footer right' },
+    { value: 'footer-left', label: 'Footer left' },
+    { value: 'header-right', label: 'Header right' },
+    { value: 'header-center', label: 'Header center' },
+    { value: 'header-left', label: 'Header left' },
+  ]
+
   let viewerCanvas: HTMLCanvasElement | null = null
   let viewerPane: HTMLDivElement | null = null
   let pdfProxy: PdfProxy | null = null
@@ -81,6 +107,11 @@
   let rangeExpression = '1'
   let metadataDraft = emptyMetadata()
   let metadataDirty = false
+  let editScope: 'current' | 'all' = 'current'
+  let watermarkText = 'CONFIDENTIAL'
+  let watermarkPosition: WatermarkPosition = 'center'
+  let pageNumberStart = '1'
+  let pageNumberPosition: PageNumberPosition = 'footer-center'
   let dragSourcePage: number | null = null
   let dropTargetPage: number | null = null
   let ocrStatus: OcrStatusPayload | null = null
@@ -217,6 +248,45 @@
       status = `Merged ${paths.length} PDF${paths.length > 1 ? 's' : ''}`
     } catch (error) {
       reportError(error, 'Failed to merge PDFs')
+    } finally {
+      busy = false
+    }
+  }
+
+  async function insertPdfAfterCurrentPage() {
+    if (!workspace || busy) return
+
+    const selection = await openDialog({
+      multiple: false,
+      filters: [{ name: 'PDF documents', extensions: ['pdf'] }],
+    })
+    const [path] = normalizeSelection(selection)
+    if (!path) return
+
+    const currentWorkspace = workspace
+    busy = true
+    statusTone = 'busy'
+    status = `Inserting ${fileNameFromPath(path)} after page ${currentPage}`
+    lastError = null
+
+    try {
+      const payload = await invoke<LoadedPdfPayload>('load_pdf', { path })
+      recentPaths = rememberRecentPath(recentPaths, path)
+      const nextBytes = await insertDocumentAfterPage(
+        currentWorkspace.bytes,
+        base64ToBytes(payload.bytesBase64),
+        currentPage - 1,
+      )
+
+      await commitGeneratedPdf(nextBytes, {
+        fileName: currentWorkspace.fileName,
+        current: Math.min(currentPage + 1, currentWorkspace.pageCount + 1),
+      })
+
+      statusTone = 'idle'
+      status = `Inserted ${payload.fileName} after page ${currentPage}`
+    } catch (error) {
+      reportError(error, 'Failed to insert the selected PDF')
     } finally {
       busy = false
     }
@@ -760,6 +830,59 @@
     }
   }
 
+  async function applyWatermark() {
+    if (!workspace || busy) return
+
+    const text = watermarkText.trim()
+    if (!text) {
+      reportError(new Error('Enter watermark text before applying it.'), 'Watermark text is required')
+      return
+    }
+
+    const currentWorkspace = workspace
+    const pageIndexes = resolveEditPageIndexes(currentWorkspace)
+    const scopeLabel = formatEditScopeLabel(currentWorkspace)
+
+    await runDocumentMutation({
+      workingStatus: `Applying watermark to ${scopeLabel}`,
+      successStatus: `Applied watermark to ${scopeLabel}`,
+      errorStatus: 'Failed to apply the text watermark',
+      nextCurrentPage: currentPage,
+      mutate: () =>
+        addTextWatermarkToDocument(currentWorkspace.bytes, {
+          text,
+          pageIndexes,
+          position: watermarkPosition,
+        }),
+    })
+  }
+
+  async function addPageNumbers() {
+    if (!workspace || busy) return
+
+    const startNumber = parsePositiveInteger(pageNumberStart, 'Starting page number')
+    if (startNumber === null) {
+      return
+    }
+
+    const currentWorkspace = workspace
+    const pageIndexes = resolveEditPageIndexes(currentWorkspace)
+    const scopeLabel = formatEditScopeLabel(currentWorkspace)
+
+    await runDocumentMutation({
+      workingStatus: `Adding page numbers to ${scopeLabel}`,
+      successStatus: `Added page numbers to ${scopeLabel}`,
+      errorStatus: 'Failed to add page numbers',
+      nextCurrentPage: currentPage,
+      mutate: () =>
+        addPageNumbersToDocument(currentWorkspace.bytes, {
+          startNumber,
+          pageIndexes,
+          position: pageNumberPosition,
+        }),
+    })
+  }
+
   async function runDocumentMutation(options: {
     workingStatus: string
     successStatus: string
@@ -925,6 +1048,33 @@
       [field]: value,
     }
     metadataDirty = true
+  }
+
+  function resolveEditPageIndexes(document: WorkspaceDocument) {
+    if (editScope === 'all') {
+      return Array.from({ length: document.pageCount }, (_, index) => index)
+    }
+
+    return [currentPage - 1]
+  }
+
+  function formatEditScopeLabel(document: WorkspaceDocument) {
+    if (editScope === 'all') {
+      return `${document.pageCount} pages`
+    }
+
+    return `page ${currentPage}`
+  }
+
+  function parsePositiveInteger(value: string | number, fieldLabel: string) {
+    const parsed = typeof value === 'number' ? value : Number.parseInt(value, 10)
+
+    if (!Number.isFinite(parsed) || parsed < 1) {
+      reportError(new Error(`${fieldLabel} must be a whole number greater than zero.`), `Invalid ${fieldLabel.toLowerCase()}`)
+      return null
+    }
+
+    return parsed
   }
 
   function handlePageDragStart(pageNumber: number, event: DragEvent) {
@@ -1125,11 +1275,75 @@
         <div class="tool-grid">
           <button on:click={extractSelectedRange} disabled={busy || !workspace}>Extract Range</button>
           <button on:click={splitIntoSinglePageFiles} disabled={busy || !workspace}>Split To Folder</button>
+          <button data-testid="insert-pdf-button" on:click={insertPdfAfterCurrentPage} disabled={busy || !workspace}>Insert PDF After</button>
           <button on:click={duplicateCurrentPage} disabled={busy || !workspace}>Duplicate Page</button>
           <button on:click={deleteCurrentPage} disabled={busy || !workspace}>Delete Page</button>
           <button on:click={insertBlankAfterCurrentPage} disabled={busy || !workspace}>Blank After</button>
           <button on:click={exportAllPagesPng} disabled={busy || !workspace}>All Pages PNG</button>
         </div>
+      </div>
+    </details>
+
+    <details class="card dock-panel" open>
+      <summary class="dock-summary">
+        <span>Overlay Edit</span>
+        <small>{workspace ? (editScope === 'all' ? 'All pages' : `Page ${currentPage}`) : 'Idle'}</small>
+      </summary>
+      <div class="dock-body">
+        <label class="field">
+          <span class="field-label">Apply To</span>
+          <select class="field-input" bind:value={editScope} disabled={!workspace || busy}>
+            {#each editScopeOptions as option}
+              <option value={option.value}>{option.label}</option>
+            {/each}
+          </select>
+        </label>
+
+        <label class="field">
+          <span class="field-label">Watermark</span>
+          <input
+            class="field-input"
+            bind:value={watermarkText}
+            disabled={!workspace || busy}
+            placeholder="CONFIDENTIAL"
+          />
+        </label>
+
+        <label class="field">
+          <span class="field-label">Watermark Position</span>
+          <select class="field-input" bind:value={watermarkPosition} disabled={!workspace || busy}>
+            {#each watermarkPositionOptions as option}
+              <option value={option.value}>{option.label}</option>
+            {/each}
+          </select>
+        </label>
+        <button data-testid="watermark-button" on:click={applyWatermark} disabled={busy || !workspace || !watermarkText.trim()}>
+          Apply Watermark
+        </button>
+
+        <label class="field">
+          <span class="field-label">Starting Number</span>
+          <input
+            class="field-input"
+            bind:value={pageNumberStart}
+            type="number"
+            min="1"
+            step="1"
+            disabled={!workspace || busy}
+          />
+        </label>
+
+        <label class="field">
+          <span class="field-label">Page Number Position</span>
+          <select class="field-input" bind:value={pageNumberPosition} disabled={!workspace || busy}>
+            {#each pageNumberPositionOptions as option}
+              <option value={option.value}>{option.label}</option>
+            {/each}
+          </select>
+        </label>
+        <button data-testid="page-numbers-button" on:click={addPageNumbers} disabled={busy || !workspace}>
+          Add Page Numbers
+        </button>
       </div>
     </details>
 

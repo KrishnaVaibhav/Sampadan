@@ -2,10 +2,13 @@ import { describe, expect, test } from 'vitest'
 
 import { createSamplePdf, readPdfSummary } from '../../test/pdf-fixtures'
 import {
+  addPageNumbersToDocument,
+  addTextWatermarkToDocument,
   applyMetadataToDocument,
   deletePageFromDocument,
   duplicatePageInDocument,
   extractPagesFromDocument,
+  insertDocumentAfterPage,
   insertBlankPageAfterCurrent,
   mergeDocuments,
   movePageInDocument,
@@ -13,6 +16,29 @@ import {
   rotatePageInDocument,
   splitDocumentIntoSinglePages,
 } from './pdf-document'
+
+async function readPdfText(bytes: Uint8Array) {
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
+  const document = await getDocument({ data: bytes.slice() }).promise
+  const pages: string[] = []
+
+  try {
+    for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+      const page = await document.getPage(pageNumber)
+      const content = await page.getTextContent()
+      const text = (content.items as Array<{ str?: string }>)
+        .map((item) => item.str ?? '')
+        .join(' ')
+        .trim()
+
+      pages.push(text)
+    }
+
+    return pages.join('\n')
+  } finally {
+    await document.destroy()
+  }
+}
 
 describe('real PDF document operations', () => {
   test('merge, extract, split, duplicate, delete, insert, and move all preserve readable PDFs', async () => {
@@ -66,5 +92,31 @@ describe('real PDF document operations', () => {
     expect(metadataAfter.creator).toBe('Sampadan Regression')
     expect(metadataAfter.author).toBe('Krishna Vaibhav')
     expect(metadataAfter.keywords).toBe('alpha, beta')
+  })
+
+  test('insertion and overlay editing keep the PDF readable and add expected text', async () => {
+    const source = await createSamplePdf(2)
+    const insertedSource = await createSamplePdf(1)
+
+    const inserted = await insertDocumentAfterPage(source, insertedSource, 0)
+    expect((await readPdfSummary(inserted)).pageCount).toBe(3)
+
+    const watermarked = await addTextWatermarkToDocument(inserted, {
+      text: 'SAMPADAN-WM',
+      pageIndexes: [0, 1, 2],
+      position: 'center',
+    })
+
+    const numbered = await addPageNumbersToDocument(watermarked, {
+      startNumber: 10,
+      pageIndexes: [0, 1, 2],
+      position: 'footer-center',
+    })
+
+    const text = await readPdfText(numbered)
+    expect(text).toContain('SAMPADAN-WM')
+    expect(text).toContain('10')
+    expect(text).toContain('11')
+    expect(text).toContain('12')
   })
 })
