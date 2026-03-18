@@ -4,6 +4,7 @@ import type { PdfMetadataDraft } from '../types'
 export type WatermarkPosition = 'center' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
 export type ReviewNoteTone = 'amber' | 'blue' | 'green' | 'rose'
 export type TextEditAlignment = 'left' | 'center' | 'right'
+export type TargetedTextReplacementStrategy = 'content-stream' | 'overlay'
 export type PageNumberPosition =
   | 'header-left'
   | 'header-center'
@@ -11,6 +12,56 @@ export type PageNumberPosition =
   | 'footer-left'
   | 'footer-center'
   | 'footer-right'
+
+export interface TargetedTextReplacementResult {
+  bytes: Uint8Array
+  strategy: TargetedTextReplacementStrategy
+}
+
+type TextOperandToken = {
+  kind: 'string' | 'hex'
+  raw: string
+  start: number
+  end: number
+}
+
+type NameToken = {
+  kind: 'name'
+  raw: string
+  start: number
+  end: number
+}
+
+type WordToken = {
+  kind: 'word'
+  raw: string
+  start: number
+  end: number
+}
+
+type NumberToken = {
+  kind: 'number'
+  raw: string
+  start: number
+  end: number
+  value: number
+}
+
+type ArrayToken = {
+  kind: 'array'
+  raw: string
+  start: number
+  end: number
+}
+
+type UnsupportedToken = {
+  kind: 'unsupported'
+  raw: string
+  start: number
+  end: number
+}
+
+type ParsedContentToken = TextOperandToken | NameToken | WordToken | NumberToken | ArrayToken | UnsupportedToken
 
 async function loadDocument(bytes: Uint8Array) {
   const { PDFDocument } = await getPdfLib()
@@ -157,6 +208,512 @@ function resolveAlignedTextX(options: {
   }
 
   return options.rectX + options.padding
+}
+
+function normalizeTextForMatch(text: string) {
+  return text.replace(/\s+/g, ' ').trim()
+}
+
+function encodePdfContentString(value: string) {
+  const bytes = new Uint8Array(value.length)
+
+  for (let index = 0; index < value.length; index += 1) {
+    bytes[index] = value.charCodeAt(index) & 0xff
+  }
+
+  return bytes
+}
+
+function decodePdfContentBytes(bytes: Uint8Array) {
+  let content = ''
+
+  for (let index = 0; index < bytes.length; index += 1) {
+    content += String.fromCharCode(bytes[index])
+  }
+
+  return content
+}
+
+function isPdfWhitespace(character: string) {
+  return character === ' ' || character === '\n' || character === '\r' || character === '\t' || character === '\f'
+}
+
+function isPdfDelimiter(character: string) {
+  return (
+    character === '(' ||
+    character === ')' ||
+    character === '<' ||
+    character === '>' ||
+    character === '[' ||
+    character === ']' ||
+    character === '{' ||
+    character === '}' ||
+    character === '/' ||
+    character === '%'
+  )
+}
+
+function skipPdfWhitespaceAndComments(content: string, startIndex: number) {
+  let index = startIndex
+
+  while (index < content.length) {
+    if (content[index] === '%') {
+      index += 1
+      while (index < content.length && content[index] !== '\n' && content[index] !== '\r') {
+        index += 1
+      }
+      continue
+    }
+
+    if (!isPdfWhitespace(content[index])) {
+      break
+    }
+
+    index += 1
+  }
+
+  return index
+}
+
+function readLiteralStringToken(content: string, start: number): ParsedContentToken | null {
+  let index = start + 1
+  let nesting = 1
+  let escaped = false
+
+  while (index < content.length) {
+    const character = content[index]
+
+    if (!escaped) {
+      if (character === '\\') {
+        escaped = true
+      } else if (character === '(') {
+        nesting += 1
+      } else if (character === ')') {
+        nesting -= 1
+        if (nesting === 0) {
+          return {
+            kind: 'string',
+            raw: content.slice(start, index + 1),
+            start,
+            end: index + 1,
+          }
+        }
+      }
+    } else {
+      escaped = false
+    }
+
+    index += 1
+  }
+
+  return null
+}
+
+function readHexStringToken(content: string, start: number): ParsedContentToken | null {
+  let index = start + 1
+
+  while (index < content.length && content[index] !== '>') {
+    index += 1
+  }
+
+  if (index >= content.length) {
+    return null
+  }
+
+  return {
+    kind: 'hex',
+    raw: content.slice(start, index + 1),
+    start,
+    end: index + 1,
+  }
+}
+
+function readArrayToken(content: string, start: number): ParsedContentToken | null {
+  let index = start + 1
+  let depth = 1
+
+  while (index < content.length) {
+    const character = content[index]
+
+    if (character === '%') {
+      index = skipPdfWhitespaceAndComments(content, index)
+      continue
+    }
+
+    if (character === '(') {
+      const token = readLiteralStringToken(content, index)
+      if (!token) {
+        return null
+      }
+      index = token.end
+      continue
+    }
+
+    if (character === '<' && content[index + 1] !== '<') {
+      const token = readHexStringToken(content, index)
+      if (!token) {
+        return null
+      }
+      index = token.end
+      continue
+    }
+
+    if (character === '<' && content[index + 1] === '<') {
+      return {
+        kind: 'unsupported',
+        raw: '<<',
+        start,
+        end: index + 2,
+      }
+    }
+
+    if (character === '[') {
+      depth += 1
+      index += 1
+      continue
+    }
+
+    if (character === ']') {
+      depth -= 1
+      index += 1
+
+      if (depth === 0) {
+        return {
+          kind: 'array',
+          raw: content.slice(start, index),
+          start,
+          end: index,
+        }
+      }
+
+      continue
+    }
+
+    index += 1
+  }
+
+  return null
+}
+
+function readNextContentToken(content: string, startIndex: number): ParsedContentToken | null {
+  const start = skipPdfWhitespaceAndComments(content, startIndex)
+
+  if (start >= content.length) {
+    return null
+  }
+
+  const character = content[start]
+
+  if (character === '(') {
+    return readLiteralStringToken(content, start)
+  }
+
+  if (character === '<') {
+    if (content[start + 1] === '<') {
+      return {
+        kind: 'unsupported',
+        raw: '<<',
+        start,
+        end: start + 2,
+      }
+    }
+
+    return readHexStringToken(content, start)
+  }
+
+  if (character === '>') {
+    if (content[start + 1] === '>') {
+      return {
+        kind: 'unsupported',
+        raw: '>>',
+        start,
+        end: start + 2,
+      }
+    }
+
+    return null
+  }
+
+  if (character === '[') {
+    return readArrayToken(content, start)
+  }
+
+  if (character === '/') {
+    let end = start + 1
+    while (end < content.length && !isPdfWhitespace(content[end]) && !isPdfDelimiter(content[end])) {
+      end += 1
+    }
+
+    return {
+      kind: 'name',
+      raw: content.slice(start, end),
+      start,
+      end,
+    }
+  }
+
+  let end = start
+  while (end < content.length && !isPdfWhitespace(content[end]) && !isPdfDelimiter(content[end])) {
+    end += 1
+  }
+
+  const raw = content.slice(start, end)
+  if (/^[+\-]?(?:\d+\.?\d*|\.\d+)$/.test(raw)) {
+    return {
+      kind: 'number',
+      raw,
+      start,
+      end,
+      value: Number(raw),
+    }
+  }
+
+  return {
+    kind: 'word',
+    raw,
+    start,
+    end,
+  }
+}
+
+function resolveStandardFontName(baseFontName: string) {
+  switch (baseFontName) {
+    case 'Courier':
+    case 'Courier-Bold':
+    case 'Courier-Oblique':
+    case 'Courier-BoldOblique':
+    case 'Helvetica':
+    case 'Helvetica-Bold':
+    case 'Helvetica-Oblique':
+    case 'Helvetica-BoldOblique':
+    case 'Times-Roman':
+    case 'Times-Bold':
+    case 'Times-Italic':
+    case 'Times-BoldItalic':
+    case 'Symbol':
+    case 'ZapfDingbats':
+      return baseFontName
+    default:
+      return null
+  }
+}
+
+function decodeTextOperand(
+  token: TextOperandToken,
+  pdfLib: Awaited<ReturnType<typeof getPdfLib>>,
+) {
+  if (token.kind === 'hex') {
+    return pdfLib.PDFHexString.of(token.raw.slice(1, -1)).decodeText()
+  }
+
+  return pdfLib.PDFString.of(token.raw.slice(1, -1)).decodeText()
+}
+
+async function attemptContentStreamTextReplacement(
+  document: Awaited<ReturnType<typeof loadDocument>>,
+  options: {
+    pageIndex: number
+    targetText: string
+    targetOccurrence: number
+    replacementText: string
+    widthPercent: number
+    fontSize: number
+  },
+) {
+  const pdfLib = await getPdfLib()
+  const { PDFArray, PDFDict, PDFName, PDFRef, PDFStream, PDFRawStream, StandardFontEmbedder, decodePDFRawStream } = pdfLib
+  const page = document.getPage(options.pageIndex)
+  const context = page.node.context
+  const rawContents = page.node.get(PDFName.Contents)
+  const resolvedContents = context.lookup(rawContents)
+
+  if (!(resolvedContents instanceof PDFArray) && !(resolvedContents instanceof PDFStream)) {
+    return false
+  }
+
+  const resources = page.node.Resources()
+  const fontDictionary = resources?.lookupMaybe(PDFName.Font, PDFDict)
+  const standardFonts = new Map<
+    string,
+    {
+      embedder: {
+        encodeText: (text: string) => { toString: () => string }
+        widthOfTextAtSize: (text: string, size: number) => number
+      }
+      baseFontName: string
+    }
+  >()
+
+  for (const [key, value] of fontDictionary?.entries() ?? []) {
+    const font = context.lookupMaybe(value, PDFDict)
+    const baseFont = font?.lookupMaybe(PDFName.of('BaseFont'), PDFName)
+    const standardFontName = baseFont ? resolveStandardFontName(baseFont.decodeText()) : null
+
+    if (!font || !standardFontName) {
+      continue
+    }
+
+    standardFonts.set(key.decodeText(), {
+      embedder: StandardFontEmbedder.for(standardFontName as never),
+      baseFontName: standardFontName,
+    })
+  }
+
+  if (standardFonts.size === 0) {
+    return false
+  }
+
+  const { width: pageWidth } = page.getSize()
+  const availableWidth = Math.max(24, pageWidth * (options.widthPercent / 100))
+  const normalizedTarget = normalizeTextForMatch(options.targetText)
+  let matchedTargetIndex = 0
+
+    const tryRewriteContentStream = (stream: any) => {
+    let contentBytes: Uint8Array
+
+      try {
+        if (stream instanceof PDFRawStream) {
+          contentBytes = decodePDFRawStream(stream).decode()
+        } else {
+          const unencoded = (stream as { getUnencodedContents?: () => Uint8Array }).getUnencodedContents
+          contentBytes = typeof unencoded === 'function' ? unencoded.call(stream) : stream.getContents()
+        }
+      } catch {
+        return null
+    }
+
+    const content = decodePdfContentBytes(contentBytes)
+    let cursor = 0
+    let currentFontKey: string | null = null
+    let currentFontSize = options.fontSize
+    let operands: ParsedContentToken[] = []
+
+    while (true) {
+      const token = readNextContentToken(content, cursor)
+      if (!token) {
+        break
+      }
+
+      cursor = token.end
+
+      if (token.kind === 'unsupported') {
+        return null
+      }
+
+      if (token.kind !== 'word') {
+        operands.push(token)
+        continue
+      }
+
+      if (token.raw === 'BI') {
+        return null
+      }
+
+      if (token.raw === 'Tf') {
+        const fontSizeToken = operands.at(-1)
+        const fontNameToken = operands.at(-2)
+
+        currentFontKey = fontNameToken?.kind === 'name' ? pdfLib.PDFName.of(fontNameToken.raw.slice(1)).decodeText() : null
+        currentFontSize = fontSizeToken?.kind === 'number' ? fontSizeToken.value : currentFontSize
+        operands = []
+        continue
+      }
+
+      if (token.raw === 'Tj') {
+        const textToken = operands.at(-1)
+
+        if (textToken?.kind === 'string' || textToken?.kind === 'hex') {
+          const decodedText = decodeTextOperand(textToken, pdfLib)
+
+          if (normalizeTextForMatch(decodedText) === normalizedTarget) {
+            if (matchedTargetIndex === options.targetOccurrence) {
+              const font = currentFontKey ? standardFonts.get(currentFontKey) : null
+
+              if (!font) {
+                return null
+              }
+
+              let replacementHex: string
+              try {
+                replacementHex = font.embedder.encodeText(options.replacementText).toString()
+              } catch {
+                return null
+              }
+
+              const replacementWidth = font.embedder.widthOfTextAtSize(options.replacementText, currentFontSize)
+              if (replacementWidth > availableWidth + Math.max(4, currentFontSize * 0.35)) {
+                return null
+              }
+
+              return `${content.slice(0, textToken.start)}${replacementHex}${content.slice(textToken.end)}`
+            }
+
+            matchedTargetIndex += 1
+          }
+        }
+      }
+
+      operands = []
+    }
+
+    return null
+  }
+
+  const commitRewrittenStream = (originalToken: unknown, stream: any, rewrittenContent: string) => {
+    const replacementStream = context.flateStream(encodePdfContentString(rewrittenContent))
+    const filterName = PDFName.of('Filter')
+    const decodeParmsName = PDFName.of('DecodeParms')
+
+    for (const [key, value] of stream.dict.entries()) {
+      if (key === PDFName.Length || key === filterName || key === decodeParmsName) {
+        continue
+      }
+
+      replacementStream.dict.set(key, value)
+    }
+
+    if (originalToken instanceof PDFRef) {
+      context.assign(originalToken, replacementStream)
+      return
+    }
+
+    if (resolvedContents instanceof PDFArray) {
+      const index = resolvedContents.indexOf(originalToken as Parameters<typeof resolvedContents.indexOf>[0])
+      if (index !== undefined) {
+        resolvedContents.set(index, replacementStream)
+      }
+      return
+    }
+
+    page.node.set(PDFName.Contents, replacementStream)
+  }
+
+  if (resolvedContents instanceof PDFArray) {
+    for (const token of resolvedContents.asArray()) {
+      const stream = context.lookupMaybe(token, PDFStream)
+      if (!stream) {
+        continue
+      }
+
+      const rewrittenContent = tryRewriteContentStream(stream)
+      if (!rewrittenContent) {
+        continue
+      }
+
+      commitRewrittenStream(token, stream, rewrittenContent)
+      return true
+    }
+
+    return false
+  }
+
+  const rewrittenContent = tryRewriteContentStream(resolvedContents)
+  if (!rewrittenContent) {
+    return false
+  }
+
+  commitRewrittenStream(rawContents, resolvedContents, rewrittenContent)
+  return true
 }
 
 export async function mergeDocuments(buffers: Uint8Array[]) {
@@ -513,6 +1070,60 @@ export async function replaceRegionWithTextInDocument(
   }
 
   return saveDocument(document)
+}
+
+export async function replaceTargetedTextInDocument(
+  bytes: Uint8Array,
+  options: {
+    targetText: string
+    replacementText: string
+    pageIndex: number
+    targetOccurrence?: number
+    xPercent: number
+    yPercent: number
+    widthPercent: number
+    heightPercent: number
+    fontSize: number
+    alignment: TextEditAlignment
+  },
+): Promise<TargetedTextReplacementResult> {
+  const replacementText = options.replacementText.trim()
+
+  if (!replacementText) {
+    throw new Error('Enter replacement text before editing the selected page text.')
+  }
+
+  const document = await loadDocument(bytes)
+  const replacedInContentStream = await attemptContentStreamTextReplacement(document, {
+    pageIndex: options.pageIndex,
+    targetText: options.targetText,
+    targetOccurrence: options.targetOccurrence ?? 0,
+    replacementText,
+    widthPercent: options.widthPercent,
+    fontSize: options.fontSize,
+  })
+
+  if (replacedInContentStream) {
+    return {
+      bytes: await saveDocument(document),
+      strategy: 'content-stream',
+    }
+  }
+
+  return {
+    bytes: await replaceRegionWithTextInDocument(bytes, {
+      text: replacementText,
+      pageIndexes: [options.pageIndex],
+      xPercent: options.xPercent,
+      yPercent: options.yPercent,
+      widthPercent: options.widthPercent,
+      heightPercent: options.heightPercent,
+      fontSize: options.fontSize,
+      alignment: options.alignment,
+      autoFit: true,
+    }),
+    strategy: 'overlay',
+  }
 }
 
 function resolveFittedTextLayout(options: {

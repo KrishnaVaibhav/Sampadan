@@ -82,12 +82,12 @@ vi.mock('./lib/viewer/pdf-viewer', async () => {
       {
         id: `workflow-target-${pageNumber}`,
         pageNumber,
-        text: `Sample page ${pageNumber} headline`,
+        text: `Body content for page ${pageNumber}`,
         xPercent: 12,
         yPercent: 14,
-        widthPercent: 26,
+        widthPercent: 36,
         heightPercent: 4,
-        fontSize: 16,
+        fontSize: 14,
       },
     ]),
   }
@@ -515,15 +515,15 @@ describe('real PDF workflow actions', () => {
 
     await user.click(screen.getByTestId('toggle-text-target-button'))
     await waitFor(() => {
-      expect(screen.getByLabelText('Target text: Sample page 2 headline')).toBeTruthy()
+      expect(screen.getByLabelText('Target text: Body content for page 2')).toBeTruthy()
     })
 
-    await user.click(screen.getByLabelText('Target text: Sample page 2 headline'))
+    await user.click(screen.getByLabelText('Target text: Body content for page 2'))
     await user.clear(screen.getByLabelText('Edit Text'))
     await user.type(screen.getByLabelText('Edit Text'), 'Selected replacement text')
     await user.click(screen.getByTestId('replace-selected-text-button'))
     await waitFor(() => {
-      expect(screen.getByText('Replaced selected text on page 2')).toBeTruthy()
+      expect(screen.getByText(/Replaced selected text on page 2/)).toBeTruthy()
     })
 
     await user.clear(screen.getByLabelText('Edit Text'))

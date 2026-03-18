@@ -27,6 +27,7 @@
     movePageInDocument,
     readMetadataFromDocument,
     replaceRegionWithTextInDocument,
+    replaceTargetedTextInDocument,
     rotatePageInDocument,
     splitDocumentIntoSinglePages,
   } from './lib/operations/pdf-document'
@@ -1408,25 +1409,48 @@
     }
 
     const currentWorkspace = workspace
+    const normalizedSelectedText = selectedTextSpan.text.replace(/\s+/g, ' ').trim()
+    const selectedTextOccurrence = Math.max(
+      0,
+      currentPageTextSpans
+        .filter((span) => span.text.replace(/\s+/g, ' ').trim() === normalizedSelectedText)
+        .findIndex((span) => span.id === selectedTextSpan.id),
+    )
 
-    await runDocumentMutation({
-      workingStatus: `Replacing selected text on page ${currentPage}`,
-      successStatus: `Replaced selected text on page ${currentPage}`,
-      errorStatus: 'Failed to replace the selected page text',
-      nextCurrentPage: currentPage,
-      mutate: () =>
-        replaceRegionWithTextInDocument(currentWorkspace.bytes, {
-          text: replacementText,
-          pageIndexes: [currentPage - 1],
-          xPercent: selectedTextSpan.xPercent,
-          yPercent: selectedTextSpan.yPercent,
-          widthPercent: selectedTextSpan.widthPercent,
-          heightPercent: selectedTextSpan.heightPercent,
-          fontSize: selectedTextSpan.fontSize,
-          alignment: textEditAlignment,
-          autoFit: true,
-        }),
-    })
+    busy = true
+    statusTone = 'busy'
+    status = `Replacing selected text on page ${currentPage}`
+    lastError = null
+
+    try {
+      const result = await replaceTargetedTextInDocument(currentWorkspace.bytes, {
+        targetText: selectedTextSpan.text,
+        replacementText,
+        pageIndex: currentPage - 1,
+        targetOccurrence: selectedTextOccurrence,
+        xPercent: selectedTextSpan.xPercent,
+        yPercent: selectedTextSpan.yPercent,
+        widthPercent: selectedTextSpan.widthPercent,
+        heightPercent: selectedTextSpan.heightPercent,
+        fontSize: selectedTextSpan.fontSize,
+        alignment: textEditAlignment,
+      })
+
+      await commitGeneratedPdf(result.bytes, {
+        fileName: currentWorkspace.fileName,
+        current: currentPage,
+      })
+
+      statusTone = 'idle'
+      status =
+        result.strategy === 'content-stream'
+          ? `Replaced selected text on page ${currentPage}`
+          : `Replaced selected text on page ${currentPage} with visual fallback`
+    } catch (error) {
+      reportError(error, 'Failed to replace the selected page text')
+    } finally {
+      busy = false
+    }
   }
 
   async function runDocumentMutation(options: {

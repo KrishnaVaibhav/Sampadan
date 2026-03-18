@@ -17,6 +17,7 @@ import {
   mergeDocuments,
   movePageInDocument,
   readMetadataFromDocument,
+  replaceTargetedTextInDocument,
   replaceRegionWithTextInDocument,
   rotatePageInDocument,
   splitDocumentIntoSinglePages,
@@ -226,5 +227,52 @@ describe('real PDF document operations', () => {
     const text = await readPdfText(replaced)
     expect(text).toContain('Edited headline for page one')
     expect(text).toContain('Replacement body copy')
+  })
+
+  test('targeted born-digital text replacement rewrites the original extracted text when the line is width-safe', async () => {
+    const source = await createSamplePdf(2)
+
+    const replaced = await replaceTargetedTextInDocument(source, {
+      targetText: 'Body content for page 1',
+      replacementText: 'Edited body copy',
+      pageIndex: 0,
+      targetOccurrence: 0,
+      xPercent: 8,
+      yPercent: 10,
+      widthPercent: 36,
+      heightPercent: 4,
+      fontSize: 14,
+      alignment: 'left',
+    })
+
+    expect(replaced.strategy).toBe('content-stream')
+    const text = await readPdfText(replaced.bytes)
+    expect(text).toContain('Edited body copy')
+    expect(text).not.toContain('Body content for page 1')
+  })
+
+  test('targeted text replacement falls back to overlay editing when the new text exceeds the original line box', async () => {
+    const source = await createSamplePdf(1)
+    const longReplacement =
+      'This replacement sentence is intentionally much longer than the original line and should trigger the safe visual fallback path.'
+
+    const replaced = await replaceTargetedTextInDocument(source, {
+      targetText: 'Body content for page 1',
+      replacementText: longReplacement,
+      pageIndex: 0,
+      targetOccurrence: 0,
+      xPercent: 8,
+      yPercent: 10,
+      widthPercent: 18,
+      heightPercent: 5,
+      fontSize: 14,
+      alignment: 'left',
+    })
+
+    expect(replaced.strategy).toBe('overlay')
+    expect((await readPdfSummary(replaced.bytes)).pageCount).toBe(1)
+    expect(replaced.bytes.length).toBeGreaterThan(source.length)
+    const text = await readPdfText(replaced.bytes)
+    expect(text).toContain('Body content for page 1')
   })
 })

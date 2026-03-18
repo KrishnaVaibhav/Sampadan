@@ -119,7 +119,7 @@ Encrypted-PDF unlock and protected-copy export also route through Rust so passwo
 Current:
 
 - `PDF.js` for viewing and page rendering
-- `pdf-lib` for merge, extract, rotate, reorder, and direct page-overlay editing
+- `pdf-lib` for merge, extract, rotate, reorder, direct page-overlay editing, and restricted content-stream text rewrites on simple born-digital PDFs
 
 Planned split:
 
@@ -224,7 +224,7 @@ These are the modules the codebase should grow into instead of adding more logic
 - `src/lib/conversion/document-export.ts`
   local Markdown, HTML, and DOCX generation from extracted PDF text
 - `src/lib/operations/pdf-document.ts`
-  merge, insert, rotate, extract, reorder, split, watermark, image stamping, review notes, true page-edit overlays, text-targeted replacement, embedded attachments, page numbering, metadata, and export helpers
+  merge, insert, rotate, extract, reorder, split, watermark, image stamping, review notes, true page-edit overlays, restricted content-stream text rewrites, text-targeted replacement fallback, embedded attachments, page numbering, metadata, and export helpers
 - `src/lib/types.ts`
   shared desktop payloads for trust, OCR, qpdf runtime state, and protected-copy options
 - `src/lib/ocr/ocr-client.ts`
@@ -327,6 +327,7 @@ Status on March 18, 2026:
 - encrypted-PDF unlock into editable workspace implemented through local qpdf
 - true page editing implemented through positioned text-block and whiteout-replace PDF mutations
 - text-targeted replacement implemented from PDF.js-extracted page text geometry for born-digital PDFs
+- restricted content-stream rewrite implemented for width-safe `Tj` text runs on simple standard-font born-digital PDFs, with automatic overlay fallback on harder documents
 - Markdown, HTML, and DOCX conversion/export implemented locally from extracted PDF text
 - detached CMS signature integrity verification implemented through local OpenSSL
 - signer certificate inventory implemented through local OpenSSL

@@ -82,6 +82,10 @@ vi.mock('./lib/operations/pdf-document', () => ({
   addTextWatermarkToDocument: vi.fn(async () => Uint8Array.from([4, 4, 4])),
   addPageNumbersToDocument: vi.fn(async () => Uint8Array.from([5, 5, 5])),
   replaceRegionWithTextInDocument: vi.fn(async () => Uint8Array.from([2, 2, 2, 2])),
+  replaceTargetedTextInDocument: vi.fn(async () => ({
+    bytes: Uint8Array.from([2, 2, 2, 2]),
+    strategy: 'content-stream',
+  })),
   readMetadataFromDocument: vi.fn(async () => ({
     title: 'Sample PDF',
     author: 'Krishna Vaibhav',
