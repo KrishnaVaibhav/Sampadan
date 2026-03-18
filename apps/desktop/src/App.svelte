@@ -36,6 +36,7 @@
     PageThumbnail,
     PdfFlags,
     PdfMetadataDraft,
+    PdfTrustReport,
     WorkspaceDocument,
   } from './lib/types'
   import { extractDocumentText, generatePageThumbnails, renderPdfPageToCanvas } from './lib/viewer/pdf-viewer'
@@ -73,6 +74,7 @@
         'Export page PNGs and full-document text',
         'Run local OCR on the current page or full document',
         'Create searchable OCR PDF copies',
+        'Inspect PDF signature and trust signals',
       ],
     },
     {
@@ -80,7 +82,7 @@
       items: [
         'Annotations and comments',
         'AcroForm editing',
-        'Signature validation',
+        'Cryptographic signature validation',
         'Encryption controls',
       ],
     },
@@ -117,6 +119,8 @@
   $: thumbnailMap = new Map(thumbnails.map((thumbnail) => [thumbnail.pageNumber, thumbnail]))
   $: ocrAvailableLanguages = ocrStatus?.languages ?? []
   $: ocrReady = ocrStatus?.available ?? false
+  $: signatureSummaries = workspace?.trustReport.signatures ?? []
+  $: trustRecommendations = workspace?.trustReport.recommendations ?? []
   $: inspectorFlags = workspace
     ? [
         { label: 'Encrypted', active: workspace.flags.encrypted },
@@ -540,6 +544,41 @@
     }
   }
 
+  async function exportTrustReport() {
+    if (!workspace || busy) return
+
+    busy = true
+    statusTone = 'busy'
+    status = 'Preparing trust report export'
+    lastError = null
+
+    try {
+      const targetPath = await saveDialog({
+        defaultPath: `${withoutExtension(workspace.fileName)}-trust-report.json`,
+        filters: [{ name: 'JSON file', extensions: ['json'] }],
+      })
+
+      if (!targetPath) {
+        statusTone = 'idle'
+        status = 'Trust report export cancelled'
+        return
+      }
+
+      const report = JSON.stringify(buildTrustReportPayload(workspace), null, 2)
+      await invoke('save_file_bytes', {
+        path: targetPath,
+        bytes_base64: bytesToBase64(new TextEncoder().encode(report)),
+      })
+
+      statusTone = 'idle'
+      status = `Exported ${fileNameFromPath(targetPath)}`
+    } catch (error) {
+      reportError(error, 'Failed to export the trust report')
+    } finally {
+      busy = false
+    }
+  }
+
   async function refreshOcrStatus() {
     try {
       const nextStatus = await fetchOcrStatus()
@@ -855,6 +894,7 @@
       bytes,
       pageCount: nextProxy.numPages,
       flags: payload.flags,
+      trustReport: payload.trustReport,
       modified: options.modified ?? false,
       source: options.source ?? (payload.path ? 'disk' : 'generated'),
     }
@@ -954,6 +994,30 @@
     return ocrStatus?.recommendedLanguage ?? 'eng'
   }
 
+  function buildTrustReportPayload(document: WorkspaceDocument): {
+    fileName: string
+    path: string | null
+    version: string
+    pageCount: number
+    source: WorkspaceDocument['source']
+    modified: boolean
+    flags: PdfFlags
+    trustReport: PdfTrustReport
+    exportedAt: string
+  } {
+    return {
+      fileName: document.fileName,
+      path: document.path,
+      version: document.version,
+      pageCount: document.pageCount,
+      source: document.source,
+      modified: document.modified,
+      flags: document.flags,
+      trustReport: document.trustReport,
+      exportedAt: new Date().toISOString(),
+    }
+  }
+
   function getOcrRenderScale() {
     const outputScale = window.devicePixelRatio || 1
     return 300 / 72 / outputScale
@@ -1030,6 +1094,7 @@
         <button on:click={() => saveWorkspace(false)} disabled={busy || !workspace}>Save</button>
         <button on:click={() => saveWorkspace(true)} disabled={busy || !workspace}>Save As</button>
         <button on:click={exportDocumentTextToFile} disabled={busy || !workspace}>Export Text</button>
+        <button on:click={exportTrustReport} disabled={busy || !workspace}>Export Trust Report</button>
       </div>
     </section>
 
@@ -1271,6 +1336,7 @@
               <span>{withExtension(workspace.fileName, '.png')}</span>
               <span>{withExtension(workspace.fileName, '.txt')}</span>
               <span>{`${withoutExtension(workspace.fileName)}-ocr.txt`}</span>
+              <span>{`${withoutExtension(workspace.fileName)}-trust-report.json`}</span>
               <span>{withExtension(workspace.fileName, '.docx')} planned</span>
             </div>
           </div>
@@ -1285,6 +1351,67 @@
             </div>
           </div>
           <div class="inspector-block">
+            <span class="meta-label">Trust Report</span>
+            <strong>
+              {#if workspace.trustReport.signatureCount > 0}
+                {workspace.trustReport.signatureCount} signature{workspace.trustReport.signatureCount === 1 ? '' : 's'} detected
+              {:else}
+                No parsed signatures
+              {/if}
+            </strong>
+            <div class="stack-list">
+              {#each trustRecommendations as recommendation}
+                <span>{recommendation}</span>
+              {/each}
+            </div>
+          </div>
+          {#if signatureSummaries.length > 0}
+            {#each signatureSummaries as signature, index}
+              <div class="inspector-block">
+                <span class="meta-label">Signature {index + 1}</span>
+                <strong>{signature.fieldName ?? signature.signerName ?? 'Unnamed signature'}</strong>
+                <div class="stack-list">
+                  {#if signature.signerName}
+                    <span>Signer: {signature.signerName}</span>
+                  {/if}
+                  {#if signature.filter}
+                    <span>Filter: {signature.filter}</span>
+                  {/if}
+                  {#if signature.subFilter}
+                    <span>SubFilter: {signature.subFilter}</span>
+                  {/if}
+                  {#if signature.modificationTime}
+                    <span>Signed at: {signature.modificationTime}</span>
+                  {/if}
+                  {#if signature.reason}
+                    <span>Reason: {signature.reason}</span>
+                  {/if}
+                  {#if signature.location}
+                    <span>Location: {signature.location}</span>
+                  {/if}
+                  {#if signature.contactInfo}
+                    <span>Contact: {signature.contactInfo}</span>
+                  {/if}
+                  {#if signature.byteRange}
+                    <span>ByteRange: {signature.byteRange.join(', ')}</span>
+                  {/if}
+                  <span>
+                    Coverage: {signature.coversWholeDocument ? 'covers final file bytes' : 'partial or stale coverage'}
+                  </span>
+                  {#if signature.isTimestamp}
+                    <span>Type: timestamp signature</span>
+                  {/if}
+                  {#if signature.docMdp}
+                    <span>DocMDP: certification policy present</span>
+                  {/if}
+                  {#each signature.notes as note}
+                    <span>{note}</span>
+                  {/each}
+                </div>
+              </div>
+            {/each}
+          {/if}
+          <div class="inspector-block">
             <span class="meta-label">Pipeline status</span>
             <div class="stack-list">
               <span>Viewer: PDF.js</span>
@@ -1292,7 +1419,7 @@
               <span>File IO: Rust + Tauri</span>
               <span>OCR: {ocrReady ? `Tesseract ${ocrStatus?.version ?? 'ready'}` : 'Install local Tesseract'}</span>
               <span>Searchable OCR PDF: local generated copy</span>
-              <span>Signatures: next local milestone</span>
+              <span>Signatures: native trust report and export</span>
             </div>
           </div>
         {:else}

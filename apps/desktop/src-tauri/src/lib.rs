@@ -1,5 +1,6 @@
 mod commands;
 mod ocr;
+mod pdf_inspect;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

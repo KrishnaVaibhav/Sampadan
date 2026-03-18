@@ -1,4 +1,7 @@
-use crate::ocr;
+use crate::{
+  ocr,
+  pdf_inspect::{self, PdfFlags, PdfTrustReport},
+};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Serialize;
 use std::{
@@ -9,21 +12,6 @@ use std::{
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PdfFlags {
-  encrypted: bool,
-  signed: bool,
-  has_forms: bool,
-  has_xfa: bool,
-  has_javascript: bool,
-  has_attachments: bool,
-  tagged: bool,
-  linearized: bool,
-  likely_scanned: bool,
-  mixed_content: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct LoadedPdf {
   path: Option<String>,
   file_name: String,
@@ -31,6 +19,7 @@ pub struct LoadedPdf {
   version: String,
   bytes_base64: String,
   flags: PdfFlags,
+  trust_report: PdfTrustReport,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -149,6 +138,7 @@ fn build_loaded_pdf(
   file_name_override: Option<String>,
   bytes: Vec<u8>,
 ) -> LoadedPdf {
+  let flags = pdf_inspect::classify_pdf(&bytes);
   let file_name = file_name_override.unwrap_or_else(|| {
     path
       .as_ref()
@@ -162,60 +152,11 @@ fn build_loaded_pdf(
     path: path.map(|value| value.to_string_lossy().to_string()),
     file_name,
     size: bytes.len(),
-    version: extract_pdf_version(&bytes),
+    version: pdf_inspect::extract_pdf_version(&bytes),
     bytes_base64: STANDARD.encode(&bytes),
-    flags: classify_pdf(&bytes),
+    trust_report: pdf_inspect::build_trust_report(&bytes, &flags),
+    flags,
   }
-}
-
-fn extract_pdf_version(bytes: &[u8]) -> String {
-  let header = bytes
-    .iter()
-    .take(32)
-    .copied()
-    .collect::<Vec<_>>();
-  let header = String::from_utf8_lossy(&header);
-
-  if let Some(version) = header.strip_prefix("%PDF-") {
-    return version
-      .chars()
-      .take_while(|value| value.is_ascii_digit() || *value == '.')
-      .collect::<String>();
-  }
-
-  "unknown".to_string()
-}
-
-fn classify_pdf(bytes: &[u8]) -> PdfFlags {
-  let text = String::from_utf8_lossy(bytes);
-  let image_count = count_occurrences(&text, &["/Subtype /Image", "/Image", "/ImageB"]);
-  let font_count = count_occurrences(&text, &["/Font", "/CIDFont"]);
-  let text_op_count = count_occurrences(&text, &["\nBT", "\rBT", " BT", "\tBT"]);
-  let page_count = count_occurrences(&text, &["/Type /Page"]);
-
-  PdfFlags {
-    encrypted: contains_any(&text, &["/Encrypt"]),
-    signed: contains_any(&text, &["/ByteRange", "/Sig", "/DocMDP"]),
-    has_forms: contains_any(&text, &["/AcroForm"]),
-    has_xfa: contains_any(&text, &["/XFA"]),
-    has_javascript: contains_any(&text, &["/JavaScript", "/JS"]),
-    has_attachments: contains_any(&text, &["/EmbeddedFiles", "/Filespec", "/Collection"]),
-    tagged: contains_any(&text, &["/StructTreeRoot", "/MarkInfo"]),
-    linearized: contains_any(&text, &["/Linearized"]),
-    likely_scanned: image_count > 0 && font_count < page_count.saturating_div(2) && text_op_count < 4,
-    mixed_content: image_count > 0 && (font_count > 0 || text_op_count > 2),
-  }
-}
-
-fn contains_any(text: &str, needles: &[&str]) -> bool {
-  needles.iter().any(|needle| text.contains(needle))
-}
-
-fn count_occurrences(text: &str, needles: &[&str]) -> usize {
-  needles
-    .iter()
-    .map(|needle| text.match_indices(needle).count())
-    .sum()
 }
 
 fn build_staging_path(target: &Path) -> PathBuf {

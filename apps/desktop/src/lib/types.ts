@@ -11,6 +11,28 @@ export interface PdfFlags {
   mixedContent: boolean
 }
 
+export interface PdfSignatureSummary {
+  fieldName: string | null
+  signerName: string | null
+  reason: string | null
+  location: string | null
+  contactInfo: string | null
+  modificationTime: string | null
+  filter: string | null
+  subFilter: string | null
+  byteRange: number[] | null
+  coversWholeDocument: boolean
+  isTimestamp: boolean
+  docMdp: boolean
+  notes: string[]
+}
+
+export interface PdfTrustReport {
+  signatureCount: number
+  signatures: PdfSignatureSummary[]
+  recommendations: string[]
+}
+
 export interface LoadedPdfPayload {
   path: string | null
   fileName: string
@@ -18,6 +40,7 @@ export interface LoadedPdfPayload {
   version: string
   bytesBase64: string
   flags: PdfFlags
+  trustReport: PdfTrustReport
 }
 
 export interface PdfMetadataDraft {
@@ -67,6 +90,7 @@ export interface WorkspaceDocument {
   bytes: Uint8Array
   pageCount: number
   flags: PdfFlags
+  trustReport: PdfTrustReport
   modified: boolean
   source: 'disk' | 'generated'
 }

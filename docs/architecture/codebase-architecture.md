@@ -100,6 +100,8 @@ Current commands:
 - `run_ocr_image`
 - `run_ocr_pdf`
 
+The same inspection pass now returns a native trust report with parsed signature details when they are available.
+
 ### 4. Document Engine Layer
 
 Current:
@@ -201,6 +203,8 @@ These are the modules the codebase should grow into instead of adding more logic
 
 - `src-tauri/src/commands.rs`
   Tauri entry points only
+- `src-tauri/src/pdf_inspect.rs`
+  PDF versioning, classification, signature parsing, and trust report generation
 - `src-tauri/src/ocr.rs`
   local Tesseract detection, language enumeration, and image OCR text/PDF execution
 - `src-tauri/src/pdf/`
@@ -268,6 +272,7 @@ Status on March 18, 2026:
 - full-document OCR preview implemented
 - OCR runtime detection and language listing implemented
 - searchable OCR PDF copy generation implemented
+- native signature/trust report inspection implemented
 - signatures, attachments, and encryption controls still pending
 
 ### Milestone 4

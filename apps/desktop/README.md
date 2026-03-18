@@ -19,6 +19,7 @@ This package contains the local-first desktop application for Sampadan.
 - edit PDF metadata
 - run local OCR through Tesseract when available on the device
 - create searchable OCR PDF copies from scanned pages
+- inspect signature and trust metadata with local report export
 
 ## Development
 
