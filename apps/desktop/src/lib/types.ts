@@ -26,6 +26,23 @@ export interface PdfSignatureSummary {
   docMdp: boolean
   integrityStatus: 'not-checked' | 'verified' | 'failed' | 'unsupported' | 'unavailable' | 'missing-data'
   integrityMessage: string | null
+  certificateTrustStatus: 'not-checked' | 'trusted' | 'self-signed' | 'untrusted' | 'unavailable' | 'missing-data'
+  certificateTrustMessage: string | null
+  certificates: PdfCertificateSummary[]
+  notes: string[]
+}
+
+export interface PdfCertificateSummary {
+  subject: string | null
+  subjectCommonName: string | null
+  issuer: string | null
+  issuerCommonName: string | null
+  serialNumber: string | null
+  notBefore: string | null
+  notAfter: string | null
+  sha256Fingerprint: string | null
+  validityStatus: 'current' | 'expired-or-not-current' | string
+  selfSigned: boolean
   notes: string[]
 }
 

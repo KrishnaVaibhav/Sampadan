@@ -20,6 +20,28 @@ pub struct SignatureValidationResult {
 }
 
 #[derive(Debug, Clone)]
+pub struct SignatureCertificateSummary {
+  pub subject: Option<String>,
+  pub subject_common_name: Option<String>,
+  pub issuer: Option<String>,
+  pub issuer_common_name: Option<String>,
+  pub serial_number: Option<String>,
+  pub not_before: Option<String>,
+  pub not_after: Option<String>,
+  pub sha256_fingerprint: Option<String>,
+  pub validity_status: String,
+  pub self_signed: bool,
+  pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SignatureCertificateInspection {
+  pub trust_status: String,
+  pub trust_message: Option<String>,
+  pub certificates: Vec<SignatureCertificateSummary>,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct ResolvedOpenSsl {
   command: PathBuf,
   display_path: String,
@@ -169,6 +191,86 @@ pub(crate) fn validate_detached_signature(
   }
 }
 
+pub(crate) fn inspect_signature_certificates(
+  openssl: &ResolvedOpenSsl,
+  signature_bytes: &[u8],
+) -> Result<SignatureCertificateInspection, String> {
+  let signature_bytes = trim_der_padding(signature_bytes);
+  if signature_bytes.is_empty() {
+    return Err("The signature /Contents entry could not be decoded into a CMS payload.".to_string());
+  }
+
+  let stamp = build_temp_stamp();
+  let signature_path = env::temp_dir().join(format!("sampadan-signature-certificates-{stamp}.der"));
+  let certificate_dump_path = env::temp_dir().join(format!("sampadan-signature-certificates-{stamp}.pem"));
+
+  fs::write(&signature_path, &signature_bytes).map_err(|error| {
+    format!(
+      "Failed to stage the signature payload {}: {error}",
+      signature_path.display()
+    )
+  })?;
+
+  let output = Command::new(&openssl.command)
+    .arg("pkcs7")
+    .arg("-inform")
+    .arg("DER")
+    .arg("-in")
+    .arg(&signature_path)
+    .arg("-print_certs")
+    .arg("-out")
+    .arg(&certificate_dump_path)
+    .output();
+
+  remove_if_exists(&signature_path);
+
+  let output = match output {
+    Ok(output) => output,
+    Err(error) => {
+      remove_if_exists(&certificate_dump_path);
+      return Err(format!("Failed to launch OpenSSL certificate extraction: {error}"));
+    }
+  };
+
+  if !output.status.success() {
+    remove_if_exists(&certificate_dump_path);
+    return Err(describe_validation_failure(&output));
+  }
+
+  let certificate_bundle = fs::read_to_string(&certificate_dump_path).map_err(|error| {
+    format!(
+      "OpenSSL extracted certificates, but Sampadan could not read {}: {error}",
+      certificate_dump_path.display()
+    )
+  })?;
+  remove_if_exists(&certificate_dump_path);
+
+  let certificate_pems = split_pem_certificates(&certificate_bundle);
+  if certificate_pems.is_empty() {
+    return Ok(SignatureCertificateInspection {
+      trust_status: "missing-data".to_string(),
+      trust_message: Some(
+        "OpenSSL did not expose any embedded certificates from the detached signature payload."
+          .to_string(),
+      ),
+      certificates: Vec::new(),
+    });
+  }
+
+  let mut certificates = Vec::new();
+  for pem in &certificate_pems {
+    certificates.push(summarize_certificate(openssl, pem)?);
+  }
+
+  let (trust_status, trust_message) = verify_certificate_chain(openssl, &certificate_pems);
+
+  Ok(SignatureCertificateInspection {
+    trust_status,
+    trust_message,
+    certificates,
+  })
+}
+
 pub(crate) fn build_signed_content(bytes: &[u8], byte_range: &[u64]) -> Result<Vec<u8>, String> {
   if byte_range.len() < 2 || byte_range.len() % 2 != 0 {
     return Err("ByteRange must contain offset-length pairs.".to_string());
@@ -216,6 +318,195 @@ fn supports_detached_cms(sub_filter: &str) -> bool {
   matches!(sub_filter, "" | "adbe.pkcs7.detached" | "ETSI.CAdES.detached")
 }
 
+fn summarize_certificate(
+  openssl: &ResolvedOpenSsl,
+  pem: &str,
+) -> Result<SignatureCertificateSummary, String> {
+  let stamp = build_temp_stamp();
+  let certificate_path = env::temp_dir().join(format!("sampadan-certificate-{stamp}.pem"));
+
+  fs::write(&certificate_path, pem).map_err(|error| {
+    format!(
+      "Failed to stage the certificate payload {}: {error}",
+      certificate_path.display()
+    )
+  })?;
+
+  let describe_output = Command::new(&openssl.command)
+    .arg("x509")
+    .arg("-in")
+    .arg(&certificate_path)
+    .arg("-noout")
+    .arg("-nameopt")
+    .arg("RFC2253")
+    .arg("-subject")
+    .arg("-issuer")
+    .arg("-serial")
+    .arg("-startdate")
+    .arg("-enddate")
+    .arg("-fingerprint")
+    .arg("-sha256")
+    .output()
+    .map_err(|error| format!("Failed to launch OpenSSL certificate inspection: {error}"))?;
+
+  if !describe_output.status.success() {
+    remove_if_exists(&certificate_path);
+    return Err(describe_validation_failure(&describe_output));
+  }
+
+  let validity_output = Command::new(&openssl.command)
+    .arg("x509")
+    .arg("-in")
+    .arg(&certificate_path)
+    .arg("-noout")
+    .arg("-checkend")
+    .arg("0")
+    .output()
+    .map_err(|error| format!("Failed to launch OpenSSL certificate validity check: {error}"))?;
+
+  remove_if_exists(&certificate_path);
+
+  let describe_text = String::from_utf8_lossy(&describe_output.stdout);
+  let subject = parse_named_value(&describe_text, &["subject"]);
+  let issuer = parse_named_value(&describe_text, &["issuer"]);
+  let serial_number = parse_named_value(&describe_text, &["serial"]);
+  let not_before = parse_named_value(&describe_text, &["notBefore"]);
+  let not_after = parse_named_value(&describe_text, &["notAfter"]);
+  let sha256_fingerprint = parse_named_value(
+    &describe_text,
+    &["sha256 Fingerprint", "SHA256 Fingerprint"],
+  );
+
+  let subject_common_name = subject
+    .as_deref()
+    .and_then(|value| extract_dn_component(value, "CN"));
+  let issuer_common_name = issuer
+    .as_deref()
+    .and_then(|value| extract_dn_component(value, "CN"));
+  let self_signed = matches!((&subject, &issuer), (Some(subject), Some(issuer)) if subject == issuer);
+  let validity_status = if validity_output.status.success() {
+    "current".to_string()
+  } else {
+    "expired-or-not-current".to_string()
+  };
+
+  let mut notes = Vec::new();
+  if self_signed {
+    notes.push("Certificate subject and issuer match. The certificate appears self-issued or self-signed.".to_string());
+  }
+  if validity_status != "current" {
+    notes.push(
+      "OpenSSL reports the certificate is expired or not currently valid at the local system time."
+        .to_string(),
+    );
+  }
+
+  Ok(SignatureCertificateSummary {
+    subject,
+    subject_common_name,
+    issuer,
+    issuer_common_name,
+    serial_number,
+    not_before,
+    not_after,
+    sha256_fingerprint,
+    validity_status,
+    self_signed,
+    notes,
+  })
+}
+
+fn verify_certificate_chain(
+  openssl: &ResolvedOpenSsl,
+  certificate_pems: &[String],
+) -> (String, Option<String>) {
+  if certificate_pems.is_empty() {
+    return (
+      "missing-data".to_string(),
+      Some("No embedded certificates were available for chain validation.".to_string()),
+    );
+  }
+
+  let stamp = build_temp_stamp();
+  let leaf_path = env::temp_dir().join(format!("sampadan-leaf-certificate-{stamp}.pem"));
+  let chain_path = env::temp_dir().join(format!("sampadan-chain-certificates-{stamp}.pem"));
+
+  if let Err(error) = fs::write(&leaf_path, &certificate_pems[0]) {
+    return (
+      "unavailable".to_string(),
+      Some(format!(
+        "Failed to stage the leaf certificate {}: {error}",
+        leaf_path.display()
+      )),
+    );
+  }
+
+  let has_chain = certificate_pems.len() > 1;
+  if has_chain {
+    let chain_bundle = certificate_pems[1..].join("\n");
+    if let Err(error) = fs::write(&chain_path, chain_bundle) {
+      remove_if_exists(&leaf_path);
+      return (
+        "unavailable".to_string(),
+        Some(format!(
+          "Failed to stage the intermediate chain {}: {error}",
+          chain_path.display()
+        )),
+      );
+    }
+  }
+
+  let mut command = Command::new(&openssl.command);
+  command.arg("verify").arg("-purpose").arg("any");
+  if has_chain {
+    command.arg("-untrusted").arg(&chain_path);
+  }
+  command.arg(&leaf_path);
+
+  let output = command.output();
+
+  remove_if_exists(&leaf_path);
+  remove_if_exists(&chain_path);
+
+  let output = match output {
+    Ok(output) => output,
+    Err(error) => {
+      return (
+        "unavailable".to_string(),
+        Some(format!("Failed to launch OpenSSL certificate verification: {error}")),
+      );
+    }
+  };
+
+  if output.status.success() {
+    return (
+      "trusted".to_string(),
+      Some(
+        "Signer certificate chain validated against the local OpenSSL CA store. Revocation was not checked."
+          .to_string(),
+      ),
+    );
+  }
+
+  let detail = describe_validation_failure(&output);
+  let lowered = detail.to_ascii_lowercase();
+  if lowered.contains("self-signed") {
+    return (
+      "self-signed".to_string(),
+      Some(format!(
+        "{detail}. Revocation was not checked."
+      )),
+    );
+  }
+
+  (
+    "untrusted".to_string(),
+    Some(format!(
+      "{detail}. Revocation was not checked."
+    )),
+  )
+}
+
 fn trim_der_padding(bytes: &[u8]) -> Vec<u8> {
   let trimmed = bytes
     .iter()
@@ -250,6 +541,66 @@ fn trim_der_padding(bytes: &[u8]) -> Vec<u8> {
   }
 
   trimmed[..total_len].to_vec()
+}
+
+fn split_pem_certificates(bundle: &str) -> Vec<String> {
+  let mut certificates = Vec::new();
+  let mut current = Vec::new();
+  let mut inside_certificate = false;
+
+  for line in bundle.lines() {
+    if line.contains("-----BEGIN CERTIFICATE-----") {
+      current.clear();
+      inside_certificate = true;
+    }
+
+    if inside_certificate {
+      current.push(line);
+    }
+
+    if line.contains("-----END CERTIFICATE-----") && inside_certificate {
+      certificates.push(current.join("\n"));
+      current.clear();
+      inside_certificate = false;
+    }
+  }
+
+  certificates
+}
+
+fn parse_named_value(output: &str, names: &[&str]) -> Option<String> {
+  for line in output.lines().map(str::trim) {
+    for name in names {
+      if let Some(value) = line.strip_prefix(&format!("{name}=")) {
+        let value = value.trim();
+        if !value.is_empty() {
+          return Some(value.to_string());
+        }
+      }
+    }
+  }
+
+  None
+}
+
+fn extract_dn_component(dn: &str, component: &str) -> Option<String> {
+  for part in dn.split(',').map(str::trim) {
+    if let Some(value) = part.strip_prefix(&format!("{component}=")) {
+      let value = value.trim();
+      if !value.is_empty() {
+        return Some(value.to_string());
+      }
+    }
+
+    if let Some(value) = part.strip_prefix(&format!("{component} = ")) {
+      let value = value.trim();
+      if !value.is_empty() {
+        return Some(value.to_string());
+      }
+    }
+  }
+
+  None
 }
 
 fn describe_validation_failure(output: &Output) -> String {
@@ -332,8 +683,8 @@ fn remove_if_exists(path: &Path) {
 #[cfg(test)]
 mod tests {
   use super::{
-    build_signed_content, resolve_openssl, runtime_from_resolved, trim_der_padding,
-    validate_detached_signature,
+    build_signed_content, extract_dn_component, inspect_signature_certificates, resolve_openssl,
+    runtime_from_resolved, split_pem_certificates, trim_der_padding, validate_detached_signature,
   };
   use std::{env, fs, process::Command};
 
@@ -350,6 +701,25 @@ mod tests {
     let der = vec![0x30, 0x03, 0x02, 0x01, 0x05, 0x00, 0x00, 0x00];
 
     assert_eq!(trim_der_padding(&der), vec![0x30, 0x03, 0x02, 0x01, 0x05]);
+  }
+
+  #[test]
+  fn split_pem_certificates_returns_all_pem_blocks() {
+    let bundle = "subject=CN=one\n-----BEGIN CERTIFICATE-----\na\n-----END CERTIFICATE-----\nsubject=CN=two\n-----BEGIN CERTIFICATE-----\nb\n-----END CERTIFICATE-----";
+
+    let certificates = split_pem_certificates(bundle);
+
+    assert_eq!(certificates.len(), 2);
+    assert!(certificates[0].contains("BEGIN CERTIFICATE"));
+    assert!(certificates[1].contains("END CERTIFICATE"));
+  }
+
+  #[test]
+  fn extract_dn_component_reads_common_name() {
+    assert_eq!(
+      extract_dn_component("CN=Sampadan Test,O=OpenAI", "CN").as_deref(),
+      Some("Sampadan Test")
+    );
   }
 
   #[test]
@@ -439,6 +809,17 @@ mod tests {
       .as_deref()
       .unwrap_or_default()
       .contains("verified locally"));
+
+    let inspection = inspect_signature_certificates(&openssl, &signature_bytes)
+      .expect("certificate inspection should succeed");
+    assert_eq!(inspection.certificates.len(), 1);
+    assert_eq!(inspection.certificates[0].subject_common_name.as_deref(), Some("Sampadan Test"));
+    assert_eq!(inspection.trust_status, "self-signed");
+    assert!(inspection
+      .trust_message
+      .as_deref()
+      .unwrap_or_default()
+      .contains("Revocation was not checked"));
 
     let _ = fs::remove_file(&content_path);
     let _ = fs::remove_file(&config_path);

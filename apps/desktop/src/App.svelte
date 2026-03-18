@@ -989,6 +989,23 @@
     }
   }
 
+  function formatCertificateTrustLabel(status: string) {
+    switch (status) {
+      case 'trusted':
+        return 'Trusted by local CA store'
+      case 'self-signed':
+        return 'Self-signed or local root missing'
+      case 'untrusted':
+        return 'Not trusted by local CA store'
+      case 'unavailable':
+        return 'Trust check unavailable'
+      case 'missing-data':
+        return 'No certificate chain'
+      default:
+        return 'Not checked'
+    }
+  }
+
   function buildTrustReportPayload(document: WorkspaceDocument): {
     fileName: string
     path: string | null
@@ -1458,6 +1475,10 @@
                   {#if signature.integrityMessage}
                     <span>{signature.integrityMessage}</span>
                   {/if}
+                  <span>Certificate trust: {formatCertificateTrustLabel(signature.certificateTrustStatus)}</span>
+                  {#if signature.certificateTrustMessage}
+                    <span>{signature.certificateTrustMessage}</span>
+                  {/if}
                   <span>
                     Coverage: {signature.coversWholeDocument ? 'covers final file bytes' : 'partial or stale coverage'}
                   </span>
@@ -1466,6 +1487,41 @@
                   {/if}
                   {#if signature.docMdp}
                     <span>DocMDP: certification policy present</span>
+                  {/if}
+                  {#if signature.certificates.length > 0}
+                    <span>
+                      Certificate chain: {signature.certificates.length} certificate{signature.certificates.length === 1 ? '' : 's'}
+                    </span>
+                    {#each signature.certificates as certificate, certificateIndex}
+                      <div class="stack-list attachment-entry">
+                        <span>
+                          Certificate {certificateIndex + 1}: {certificate.subjectCommonName ?? certificate.subject ?? 'Unnamed certificate'}
+                        </span>
+                        {#if certificate.subject}
+                          <span>Subject: {certificate.subject}</span>
+                        {/if}
+                        {#if certificate.issuer}
+                          <span>Issuer: {certificate.issuer}</span>
+                        {/if}
+                        {#if certificate.serialNumber}
+                          <span>Serial: {certificate.serialNumber}</span>
+                        {/if}
+                        <span>Validity: {certificate.validityStatus}</span>
+                        {#if certificate.notBefore}
+                          <span>Not before: {certificate.notBefore}</span>
+                        {/if}
+                        {#if certificate.notAfter}
+                          <span>Not after: {certificate.notAfter}</span>
+                        {/if}
+                        {#if certificate.sha256Fingerprint}
+                          <span>SHA-256: {certificate.sha256Fingerprint}</span>
+                        {/if}
+                        <span>{certificate.selfSigned ? 'Self-signed or self-issued' : 'Issued by a distinct certificate authority'}</span>
+                        {#each certificate.notes as note}
+                          <span>{note}</span>
+                        {/each}
+                      </div>
+                    {/each}
                   {/if}
                   {#each signature.notes as note}
                     <span>{note}</span>

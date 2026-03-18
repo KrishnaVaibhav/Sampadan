@@ -22,6 +22,7 @@ This package contains the local-first desktop application for Sampadan.
 - create searchable OCR PDF copies from scanned pages
 - inspect signature, attachment, and encryption trust metadata with local report export
 - cryptographically verify detached CMS PDF signatures locally when OpenSSL is available
+- inspect embedded signer certificates and attempt local CA-store trust validation through OpenSSL
 
 ## Development
 
@@ -47,3 +48,11 @@ The desktop app probes the local machine for a Tesseract binary at runtime. On W
 ## Signature Validation
 
 The desktop app probes the local machine for an OpenSSL binary when it encounters signed PDFs. If `openssl` is not already on `PATH`, you can point Sampadan at a local install with `SAMPADAN_OPENSSL_PATH`.
+
+Sampadan currently performs:
+
+- detached CMS integrity verification against the PDF `ByteRange`
+- embedded signer certificate inventory
+- local certificate-chain trust attempts against the OpenSSL CA store
+
+Revocation checking is still pending.

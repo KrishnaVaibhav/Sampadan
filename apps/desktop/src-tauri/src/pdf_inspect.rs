@@ -34,6 +34,9 @@ pub struct PdfSignatureSummary {
   pub doc_mdp: bool,
   pub integrity_status: String,
   pub integrity_message: Option<String>,
+  pub certificate_trust_status: String,
+  pub certificate_trust_message: Option<String>,
+  pub certificates: Vec<PdfCertificateSummary>,
   pub notes: Vec<String>,
 }
 
@@ -81,6 +84,22 @@ pub struct PdfEncryptionSummary {
   pub stream_filter: Option<String>,
   pub string_filter: Option<String>,
   pub encrypt_metadata: Option<bool>,
+  pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfCertificateSummary {
+  pub subject: Option<String>,
+  pub subject_common_name: Option<String>,
+  pub issuer: Option<String>,
+  pub issuer_common_name: Option<String>,
+  pub serial_number: Option<String>,
+  pub not_before: Option<String>,
+  pub not_after: Option<String>,
+  pub sha256_fingerprint: Option<String>,
+  pub validity_status: String,
+  pub self_signed: bool,
   pub notes: Vec<String>,
 }
 
@@ -180,6 +199,36 @@ pub fn build_trust_report(bytes: &[u8], flags: &PdfFlags) -> PdfTrustReport {
   {
     recommendations.push(
       "Some signatures use SubFilter variants that Sampadan does not validate yet."
+        .to_string(),
+    );
+  }
+
+  if signatures
+    .iter()
+    .any(|signature| signature.certificate_trust_status == "trusted")
+  {
+    recommendations.push(
+      "At least one signer certificate chain validated against the local OpenSSL CA store. Revocation was not checked."
+        .to_string(),
+    );
+  }
+
+  if signatures
+    .iter()
+    .any(|signature| signature.certificate_trust_status == "self-signed")
+  {
+    recommendations.push(
+      "At least one signer certificate is self-signed or not anchored in the local OpenSSL trust store."
+        .to_string(),
+    );
+  }
+
+  if signatures
+    .iter()
+    .any(|signature| signature.certificate_trust_status == "untrusted")
+  {
+    recommendations.push(
+      "At least one signer certificate chain could not be anchored in the local OpenSSL trust store."
         .to_string(),
     );
   }
@@ -343,6 +392,9 @@ fn parse_signature_entry(
       doc_mdp,
       integrity_status: "not-checked".to_string(),
       integrity_message: None,
+      certificate_trust_status: "not-checked".to_string(),
+      certificate_trust_message: None,
+      certificates: Vec::new(),
       notes,
     },
     contents_bytes,
@@ -386,6 +438,8 @@ fn validate_signatures(
       for index in eligible_indices {
         signatures[index].summary.integrity_status = "unavailable".to_string();
         signatures[index].summary.integrity_message = Some(reason.clone());
+        signatures[index].summary.certificate_trust_status = "unavailable".to_string();
+        signatures[index].summary.certificate_trust_message = Some(reason.clone());
       }
 
       return Some(PdfSignatureValidationRuntime {
@@ -419,6 +473,46 @@ fn validate_signatures(
     );
     signature.summary.integrity_status = validation.integrity_status;
     signature.summary.integrity_message = validation.integrity_message;
+
+    match signature_validation::inspect_signature_certificates(&openssl, contents_bytes) {
+      Ok(inspection) => {
+        signature.summary.certificate_trust_status = inspection.trust_status;
+        signature.summary.certificate_trust_message = inspection.trust_message;
+        signature.summary.certificates = inspection
+          .certificates
+          .into_iter()
+          .map(|certificate| PdfCertificateSummary {
+            subject: certificate.subject,
+            subject_common_name: certificate.subject_common_name,
+            issuer: certificate.issuer,
+            issuer_common_name: certificate.issuer_common_name,
+            serial_number: certificate.serial_number,
+            not_before: certificate.not_before,
+            not_after: certificate.not_after,
+            sha256_fingerprint: certificate.sha256_fingerprint,
+            validity_status: certificate.validity_status,
+            self_signed: certificate.self_signed,
+            notes: certificate.notes,
+          })
+          .collect();
+
+        if signature.summary.signer_name.is_none() {
+          signature.summary.signer_name = signature
+            .summary
+            .certificates
+            .first()
+            .and_then(|certificate| certificate.subject_common_name.clone());
+        }
+      }
+      Err(error) => {
+        signature.summary.certificate_trust_status = "unavailable".to_string();
+        signature.summary.certificate_trust_message = Some(error.clone());
+        signature
+          .summary
+          .notes
+          .push(format!("Certificate inspection failed: {error}"));
+      }
+    }
   }
 
   let runtime = signature_validation::runtime_from_resolved(&openssl);

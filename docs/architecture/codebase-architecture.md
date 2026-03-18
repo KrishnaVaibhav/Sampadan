@@ -29,7 +29,7 @@ The product target is:
 - Viewer/rendering: `PDF.js`
 - PDF mutation today: `pdf-lib`
 - Native OCR today: local `Tesseract` runtime detection and invocation
-- Native signature validation today: local `OpenSSL` runtime detection and detached CMS verification
+- Native signature validation today: local `OpenSSL` runtime detection, detached CMS verification, and signer certificate inspection
 - Native PDF pipeline planned: `qpdf`, `PDFium`
 
 ## Repository Layout
@@ -103,7 +103,7 @@ Current commands:
 - `run_ocr_image`
 - `run_ocr_pdf`
 
-The same inspection pass now returns a native trust report with parsed signature, attachment, and encryption details when they are available. When a signed PDF exposes a detached CMS payload and a usable `ByteRange`, Sampadan also attempts local cryptographic verification through `OpenSSL`.
+The same inspection pass now returns a native trust report with parsed signature, attachment, and encryption details when they are available. When a signed PDF exposes a detached CMS payload and a usable `ByteRange`, Sampadan also attempts local cryptographic verification through `OpenSSL`, inventories embedded signer certificates, and tries a local CA-store chain validation. Revocation is not checked yet.
 
 ### 4. Document Engine Layer
 
@@ -213,7 +213,7 @@ These are the modules the codebase should grow into instead of adding more logic
 - `src-tauri/src/ocr.rs`
   local Tesseract detection, language enumeration, and image OCR text/PDF execution
 - `src-tauri/src/signature_validation.rs`
-  local OpenSSL detection, detached CMS verification, and signature byte-range assembly
+  local OpenSSL detection, detached CMS verification, signer certificate extraction, and certificate-chain trust checks
 - `src-tauri/src/pdf/`
   document inspection and capability detection
 - `src-tauri/src/io/`
@@ -283,8 +283,10 @@ Status on March 18, 2026:
 - native attachment inspection implemented
 - native encryption summary inspection implemented
 - detached CMS signature integrity verification implemented through local OpenSSL
+- signer certificate inventory implemented through local OpenSSL
+- local CA-store certificate-chain trust attempts implemented
 - regression tests now cover critical viewer, OCR, trust, edit, and export controls
-- certificate chain trust, revocation, timestamps, and write-side encryption controls still pending
+- revocation, timestamp authority validation depth, and write-side encryption controls still pending
 
 ### Milestone 4
 

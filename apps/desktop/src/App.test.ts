@@ -97,6 +97,23 @@ const sampleTrustReport: PdfTrustReport = {
       docMdp: true,
       integrityStatus: 'verified',
       integrityMessage: 'Detached CMS signature verified locally against the PDF ByteRange content.',
+      certificateTrustStatus: 'self-signed',
+      certificateTrustMessage: 'error 18 at 0 depth lookup: self-signed certificate. Revocation was not checked.',
+      certificates: [
+        {
+          subject: 'CN=Krishna Vaibhav',
+          subjectCommonName: 'Krishna Vaibhav',
+          issuer: 'CN=Krishna Vaibhav',
+          issuerCommonName: 'Krishna Vaibhav',
+          serialNumber: 'A1B2C3D4',
+          notBefore: 'Mar 18 07:00:00 2026 GMT',
+          notAfter: 'Mar 19 07:00:00 2026 GMT',
+          sha256Fingerprint: 'AA:BB:CC:DD',
+          validityStatus: 'current',
+          selfSigned: true,
+          notes: ['Certificate subject and issuer match. The certificate appears self-issued or self-signed.'],
+        },
+      ],
       notes: ['Contains DocMDP certification policy'],
     },
   ],
@@ -247,6 +264,9 @@ describe('Sampadan desktop app regression suite', () => {
     expect(screen.getByText('1 signature detected')).toBeTruthy()
     expect(screen.getByText('OpenSSL detected')).toBeTruthy()
     expect(screen.getByText('Integrity: Verified locally')).toBeTruthy()
+    expect(screen.getByText('Certificate trust: Self-signed or local root missing')).toBeTruthy()
+    expect(screen.getByText('Certificate chain: 1 certificate')).toBeTruthy()
+    expect(screen.getByText('SHA-256: AA:BB:CC:DD')).toBeTruthy()
   })
 
   test('exports the trust report through the local save pipeline', async () => {
