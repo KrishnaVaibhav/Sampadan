@@ -327,7 +327,7 @@ Status on March 18, 2026:
 - encrypted-PDF unlock into editable workspace implemented through local qpdf
 - true page editing implemented through positioned text-block and whiteout-replace PDF mutations
 - text-targeted replacement implemented from PDF.js-extracted page text geometry for born-digital PDFs
-- restricted content-stream rewrite implemented for width-safe `Tj` text runs on simple standard-font born-digital PDFs, with automatic overlay fallback on harder documents
+- restricted content-stream rewrite implemented for width-safe `Tj`, `TJ`, and line-show text operators on simple standard-font born-digital PDFs, with automatic overlay fallback on harder documents
 - Markdown, HTML, and DOCX conversion/export implemented locally from extracted PDF text
 - detached CMS signature integrity verification implemented through local OpenSSL
 - signer certificate inventory implemented through local OpenSSL

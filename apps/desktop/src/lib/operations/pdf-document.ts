@@ -477,7 +477,9 @@ function readNextContentToken(content: string, startIndex: number): ParsedConten
 }
 
 function resolveStandardFontName(baseFontName: string) {
-  switch (baseFontName) {
+  const normalizedBaseFontName = baseFontName.replace(/^[A-Z]{6}\+/, '')
+
+  switch (normalizedBaseFontName) {
     case 'Courier':
     case 'Courier-Bold':
     case 'Courier-Oblique':
@@ -492,7 +494,7 @@ function resolveStandardFontName(baseFontName: string) {
     case 'Times-BoldItalic':
     case 'Symbol':
     case 'ZapfDingbats':
-      return baseFontName
+      return normalizedBaseFontName
     default:
       return null
   }
@@ -507,6 +509,68 @@ function decodeTextOperand(
   }
 
   return pdfLib.PDFString.of(token.raw.slice(1, -1)).decodeText()
+}
+
+function parseAdjustedTextArrayToken(token: ArrayToken): Array<TextOperandToken | NumberToken> | null {
+  const inner = token.raw.slice(1, -1)
+  const segments: Array<TextOperandToken | NumberToken> = []
+  let cursor = 0
+
+  while (true) {
+    const segment = readNextContentToken(inner, cursor)
+    if (!segment) {
+      break
+    }
+
+    cursor = segment.end
+
+    if (segment.kind === 'string' || segment.kind === 'hex' || segment.kind === 'number') {
+      segments.push(segment)
+      continue
+    }
+
+    return null
+  }
+
+  return segments
+}
+
+function resolveTextShowCandidate(
+  operatorName: string,
+  operands: ParsedContentToken[],
+  pdfLib: Awaited<ReturnType<typeof getPdfLib>>,
+) {
+  const operand = operands.at(-1)
+
+  if (
+    (operatorName === 'Tj' || operatorName === "'" || operatorName === '"') &&
+    operand &&
+    (operand.kind === 'string' || operand.kind === 'hex')
+  ) {
+    return {
+      token: operand,
+      decodedText: decodeTextOperand(operand, pdfLib),
+      replacementRaw: (replacementHex: string) => replacementHex,
+    }
+  }
+
+  if (operatorName === 'TJ' && operand?.kind === 'array') {
+    const segments = parseAdjustedTextArrayToken(operand)
+    if (!segments) {
+      return null
+    }
+
+    return {
+      token: operand,
+      decodedText: segments
+        .filter((segment): segment is TextOperandToken => segment.kind === 'string' || segment.kind === 'hex')
+        .map((segment) => decodeTextOperand(segment, pdfLib))
+        .join(''),
+      replacementRaw: (replacementHex: string) => `[${replacementHex}]`,
+    }
+  }
+
+  return null
 }
 
 async function attemptContentStreamTextReplacement(
@@ -540,7 +604,6 @@ async function attemptContentStreamTextReplacement(
         encodeText: (text: string) => { toString: () => string }
         widthOfTextAtSize: (text: string, size: number) => number
       }
-      baseFontName: string
     }
   >()
 
@@ -555,7 +618,6 @@ async function attemptContentStreamTextReplacement(
 
     standardFonts.set(key.decodeText(), {
       embedder: StandardFontEmbedder.for(standardFontName as never),
-      baseFontName: standardFontName,
     })
   }
 
@@ -568,18 +630,18 @@ async function attemptContentStreamTextReplacement(
   const normalizedTarget = normalizeTextForMatch(options.targetText)
   let matchedTargetIndex = 0
 
-    const tryRewriteContentStream = (stream: any) => {
+  const tryRewriteContentStream = (stream: any) => {
     let contentBytes: Uint8Array
 
-      try {
-        if (stream instanceof PDFRawStream) {
-          contentBytes = decodePDFRawStream(stream).decode()
-        } else {
-          const unencoded = (stream as { getUnencodedContents?: () => Uint8Array }).getUnencodedContents
-          contentBytes = typeof unencoded === 'function' ? unencoded.call(stream) : stream.getContents()
-        }
-      } catch {
-        return null
+    try {
+      if (stream instanceof PDFRawStream) {
+        contentBytes = decodePDFRawStream(stream).decode()
+      } else {
+        const unencoded = (stream as { getUnencodedContents?: () => Uint8Array }).getUnencodedContents
+        contentBytes = typeof unencoded === 'function' ? unencoded.call(stream) : stream.getContents()
+      }
+    } catch {
+      return null
     }
 
     const content = decodePdfContentBytes(contentBytes)
@@ -619,38 +681,32 @@ async function attemptContentStreamTextReplacement(
         continue
       }
 
-      if (token.raw === 'Tj') {
-        const textToken = operands.at(-1)
+      const candidate = resolveTextShowCandidate(token.raw, operands, pdfLib)
+      if (candidate && normalizeTextForMatch(candidate.decodedText) === normalizedTarget) {
+        if (matchedTargetIndex === options.targetOccurrence) {
+          const font = currentFontKey ? standardFonts.get(currentFontKey) : null
 
-        if (textToken?.kind === 'string' || textToken?.kind === 'hex') {
-          const decodedText = decodeTextOperand(textToken, pdfLib)
-
-          if (normalizeTextForMatch(decodedText) === normalizedTarget) {
-            if (matchedTargetIndex === options.targetOccurrence) {
-              const font = currentFontKey ? standardFonts.get(currentFontKey) : null
-
-              if (!font) {
-                return null
-              }
-
-              let replacementHex: string
-              try {
-                replacementHex = font.embedder.encodeText(options.replacementText).toString()
-              } catch {
-                return null
-              }
-
-              const replacementWidth = font.embedder.widthOfTextAtSize(options.replacementText, currentFontSize)
-              if (replacementWidth > availableWidth + Math.max(4, currentFontSize * 0.35)) {
-                return null
-              }
-
-              return `${content.slice(0, textToken.start)}${replacementHex}${content.slice(textToken.end)}`
-            }
-
-            matchedTargetIndex += 1
+          if (!font) {
+            return null
           }
+
+          let replacementHex: string
+          try {
+            replacementHex = font.embedder.encodeText(options.replacementText).toString()
+          } catch {
+            return null
+          }
+
+          const replacementWidth = font.embedder.widthOfTextAtSize(options.replacementText, currentFontSize)
+          if (replacementWidth > availableWidth + Math.max(4, currentFontSize * 0.35)) {
+            return null
+          }
+
+          const replacementRaw = candidate.replacementRaw(replacementHex)
+          return `${content.slice(0, candidate.token.start)}${replacementRaw}${content.slice(candidate.token.end)}`
         }
+
+        matchedTargetIndex += 1
       }
 
       operands = []
