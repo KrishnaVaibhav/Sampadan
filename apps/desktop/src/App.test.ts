@@ -500,6 +500,7 @@ describe('Sampadan desktop app regression suite', () => {
       'Export Markdown',
       'Export HTML',
       'Export DOCX',
+      'Export Structured JSON',
       'Next',
       'Fit Width',
       'Rotate Left',
@@ -641,6 +642,40 @@ describe('Sampadan desktop app regression suite', () => {
       )
     })
 
+    expectCamelCasePayloadKeys(getInvokePayloads('save_file_bytes'), ['path', 'bytesBase64'])
+  })
+
+  test('exports structured json through the local save pipeline', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
+    saveDialogMock.mockResolvedValue('C:/exports/sample-structured.json')
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect((screen.getByRole('button', { name: 'Export Structured JSON' }) as HTMLButtonElement).disabled).toBe(
+        false,
+      )
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Export Structured JSON' }))
+
+    let structuredPayload: Record<string, unknown> | undefined
+    await waitFor(() => {
+      structuredPayload = getInvokePayloads('save_file_bytes').find(
+        (payload) => payload.path === 'C:/exports/sample-structured.json',
+      )
+      expect(structuredPayload).toBeTruthy()
+    })
+
+    const bytesBase64 = String(structuredPayload?.bytesBase64 ?? '')
+    const jsonText = atob(bytesBase64)
+    const structuredDocument = JSON.parse(jsonText)
+
+    expect(structuredDocument.generatedBy).toBe('Sampadan')
+    expect(structuredDocument.sourceFileName).toBe('sample.pdf')
+    expect(structuredDocument.pages[0].blocks.length).toBeGreaterThan(0)
     expectCamelCasePayloadKeys(getInvokePayloads('save_file_bytes'), ['path', 'bytesBase64'])
   })
 
@@ -1003,6 +1038,7 @@ describe('Sampadan desktop app regression suite', () => {
       .mockResolvedValueOnce('C:/exports/sample.md')
       .mockResolvedValueOnce('C:/exports/sample.html')
       .mockResolvedValueOnce('C:/exports/sample.docx')
+      .mockResolvedValueOnce('C:/exports/sample-structured.json')
 
     const user = userEvent.setup()
     render(App)
@@ -1041,6 +1077,7 @@ describe('Sampadan desktop app regression suite', () => {
     await user.click(screen.getByRole('button', { name: 'Export Markdown' }))
     await user.click(screen.getByRole('button', { name: 'Export HTML' }))
     await user.click(screen.getByRole('button', { name: 'Export DOCX' }))
+    await user.click(screen.getByRole('button', { name: 'Export Structured JSON' }))
     await user.click(screen.getByRole('button', { name: 'All Pages PNG' }))
     await user.click(screen.getByRole('button', { name: 'Split To Folder' }))
 

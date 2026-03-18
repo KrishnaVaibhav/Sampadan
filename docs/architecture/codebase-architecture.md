@@ -238,7 +238,7 @@ These are the modules the codebase should grow into instead of adding more logic
 - `src/lib/viewer/pdf-viewer.ts`
   PDF.js canvas rendering, thumbnails, text extraction, annotation extraction, page text-target geometry, and layout-aware text-line export data
 - `src/lib/conversion/document-export.ts`
-  local Markdown plus layout-aware HTML and DOCX generation from extracted PDF text and page geometry
+  local Markdown plus semantic structured JSON, layout-aware HTML, and layout-aware DOCX generation from extracted PDF text and page geometry
 - `src/lib/operations/pdf-document.ts`
   merge, insert, rotate, extract, reorder, split, watermark, image stamping, review notes, true page-edit overlays, restricted content-stream text rewrites, text-targeted replacement fallback, embedded attachments, page numbering, metadata, and export helpers
 - `src/lib/operations/pdf-annotations.ts`
@@ -355,7 +355,7 @@ Status on March 18, 2026:
 - current-page annotation management, in-place comment editing, and removal implemented in the desktop rail
 - text-targeted replacement implemented from PDF.js-extracted page text geometry for born-digital PDFs
 - restricted content-stream rewrite implemented for width-safe `Tj`, split `Tj`/`TJ` sequences, `TJ`, and line-show text operators on simple standard-font born-digital PDFs, with automatic overlay fallback on harder documents
-- Markdown plus layout-aware HTML and DOCX conversion/export implemented locally from extracted PDF text and page geometry
+- Markdown plus semantic structured JSON, layout-aware HTML, and layout-aware DOCX conversion/export implemented locally from extracted PDF text and page geometry
 - detached CMS signature integrity verification implemented through local OpenSSL
 - signer certificate inventory implemented through local OpenSSL
 - local CA-store certificate-chain trust attempts implemented

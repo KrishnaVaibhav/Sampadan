@@ -581,6 +581,7 @@ describe('real PDF workflow actions', () => {
       .mockResolvedValueOnce('C:/exports/document.md')
       .mockResolvedValueOnce('C:/exports/document.html')
       .mockResolvedValueOnce('C:/exports/document.docx')
+      .mockResolvedValueOnce('C:/exports/document-structured.json')
       .mockResolvedValueOnce('C:/exports/trust.json')
 
     const user = userEvent.setup()
@@ -770,6 +771,12 @@ describe('real PDF workflow actions', () => {
       expect(saveCalls.length).toBe(19)
     })
 
+    await user.click(screen.getByRole('button', { name: 'Export Structured JSON' }))
+    await waitFor(() => {
+      const saveCalls = invokeMock.mock.calls.filter(([command]) => command === 'save_file_bytes')
+      expect(saveCalls.length).toBe(20)
+    })
+
     await user.click(screen.getByRole('button', { name: 'Export Trust Report' }))
 
     await waitFor(() => {
@@ -777,7 +784,7 @@ describe('real PDF workflow actions', () => {
       const saveCalls = invokeMock.mock.calls.filter(([command]) => command === 'save_file_bytes')
 
       expect(inspectCalls.length).toBeGreaterThanOrEqual(13)
-      expect(saveCalls.length).toBe(20)
+      expect(saveCalls.length).toBe(21)
     })
 
     expectCamelCasePayloadKeys(getInvokePayloads('load_file_bytes'), ['path'])

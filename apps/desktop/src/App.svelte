@@ -8,6 +8,7 @@
     buildDocxExport,
     buildHtmlExport,
     buildMarkdownExport,
+    buildStructuredJsonExport,
   } from './lib/conversion/document-export'
   import { type PdfProxy, loadPdfProxy } from './lib/pdf-engine'
   import {
@@ -773,6 +774,20 @@
     })
   }
 
+  async function exportDocumentStructuredJson() {
+    await exportConvertedDocument({
+      formatLabel: 'structured JSON',
+      extension: 'json',
+      workingStatus: 'Converting PDF text to structured JSON',
+      cancelStatus: 'Structured JSON export cancelled',
+      errorStatus: 'Failed to export structured JSON',
+      saveFilterName: 'Structured JSON file',
+      useLayout: true,
+      defaultFileName: `${withoutExtension(workspace!.fileName)}-structured.json`,
+      buildBytes: (pages, layoutPages) => buildStructuredJsonExport(workspace!.fileName, pages, layoutPages),
+    })
+  }
+
   async function exportConvertedDocument(options: {
     formatLabel: string
     extension: string
@@ -781,6 +796,7 @@
     errorStatus: string
     saveFilterName: string
     useLayout?: boolean
+    defaultFileName?: string
     buildBytes: (pages: string[], layoutPages?: Awaited<ReturnType<typeof extractDocumentTextLayout>>) => Uint8Array | Promise<Uint8Array>
   }) {
     if (!workspace || !pdfProxy || busy) return
@@ -794,7 +810,7 @@
       const pages = await extractDocumentTextPages(pdfProxy)
       const layoutPages = options.useLayout ? await extractDocumentTextLayout(pdfProxy) : undefined
       const targetPath = await saveDialog({
-        defaultPath: withExtension(workspace.fileName, options.extension),
+        defaultPath: options.defaultFileName ?? withExtension(workspace.fileName, options.extension),
         filters: [{ name: options.saveFilterName, extensions: [options.extension] }],
       })
 
@@ -2536,12 +2552,13 @@
         <small>{workspace ? 'Ready' : 'Idle'}</small>
       </summary>
       <div class="dock-body">
-        <p class="muted panel-note">Generate local text-first exports from the current PDF session.</p>
+        <p class="muted panel-note">Generate local text-first and structured exports from the current PDF session.</p>
         <div class="tool-grid">
           <button on:click={exportDocumentTextToFile} disabled={busy || !workspace}>Export Text</button>
           <button on:click={exportDocumentMarkdown} disabled={busy || !workspace}>Export Markdown</button>
           <button on:click={exportDocumentHtml} disabled={busy || !workspace}>Export HTML</button>
           <button on:click={exportDocumentDocx} disabled={busy || !workspace}>Export DOCX</button>
+          <button on:click={exportDocumentStructuredJson} disabled={busy || !workspace}>Export Structured JSON</button>
         </div>
       </div>
     </details>
