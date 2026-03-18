@@ -11,6 +11,11 @@
   } from './lib/conversion/document-export'
   import { type PdfProxy, loadPdfProxy } from './lib/pdf-engine'
   import {
+    applyFormFieldValuesToDocument,
+    flattenFormFieldsInDocument,
+    readFormFieldsFromDocument,
+  } from './lib/operations/pdf-forms'
+  import {
     addAttachmentToDocument,
     addFreeTextBlockToDocument,
     addReviewNoteToDocument,
@@ -56,6 +61,8 @@
     LoadedPdfPayload,
     OcrStatusPayload,
     PageThumbnail,
+    PdfFormField,
+    PdfFormFieldValue,
     PdfPageTextSpan,
     PdfFlags,
     PdfMetadataDraft,
@@ -170,6 +177,7 @@
   let renderToken = 0
   let thumbnailToken = 0
   let metadataToken = 0
+  let formFieldToken = 0
   let textSpanToken = 0
   let thumbnails: PageThumbnail[] = []
   let currentPageTextSpans: PdfPageTextSpan[] = []
@@ -179,6 +187,11 @@
   let rangeExpression = '1'
   let metadataDraft = emptyMetadata()
   let metadataDirty = false
+  let formFields: PdfFormField[] = []
+  let formDrafts: Record<string, PdfFormFieldValue> = {}
+  let formFieldsLoading = false
+  let formDirty = false
+  let flattenFormsOnApply = false
   let attachmentDescriptionDraft = ''
   let editScope: 'current' | 'all' = 'current'
   let watermarkText = 'CONFIDENTIAL'
@@ -225,6 +238,7 @@
   $: attachmentSummaries = workspace?.trustReport.attachments ?? []
   $: encryptionSummary = workspace?.trustReport.encryption ?? null
   $: trustRecommendations = workspace?.trustReport.recommendations ?? []
+  $: editableFormFields = formFields.filter((field) => field.editable)
   $: inspectorFlags = workspace
     ? [
         { label: 'Encrypted', active: workspace.flags.encrypted },
@@ -1257,6 +1271,52 @@
     }
   }
 
+  async function applyFormFieldValues() {
+    if (!workspace || busy || workspace.flags.hasXfa || formFields.length === 0) return
+    const currentWorkspace = workspace
+
+    const updates = formFields
+      .filter((field) => field.editable)
+      .map((field) => ({
+        name: field.name,
+        kind: field.kind,
+        value: cloneFormFieldValue(getFormFieldDraftValue(field)),
+      }))
+
+    if (updates.length === 0) {
+      reportError(new Error('No editable AcroForm fields were found in this document.'), 'No editable form fields')
+      return
+    }
+
+    const applied = await runDocumentMutation({
+      workingStatus: flattenFormsOnApply ? 'Applying and flattening form fields' : 'Applying form field values',
+      successStatus: flattenFormsOnApply ? 'Applied and flattened form fields' : 'Applied form field values',
+      errorStatus: 'Failed to apply the form field values',
+      nextCurrentPage: currentPage,
+      mutate: () =>
+        applyFormFieldValuesToDocument(currentWorkspace.bytes, updates, {
+          flatten: flattenFormsOnApply,
+        }),
+    })
+
+    if (applied) {
+      formDirty = false
+    }
+  }
+
+  async function flattenFormFields() {
+    if (!workspace || busy || workspace.flags.hasXfa || formFields.length === 0) return
+    const currentWorkspace = workspace
+
+    await runDocumentMutation({
+      workingStatus: 'Flattening form fields into page content',
+      successStatus: 'Flattened form fields',
+      errorStatus: 'Failed to flatten the form fields',
+      nextCurrentPage: currentPage,
+      mutate: () => flattenFormFieldsInDocument(currentWorkspace.bytes),
+    })
+  }
+
   async function applyWatermark() {
     if (!workspace || busy) return
 
@@ -1586,6 +1646,11 @@
     renderedPageHeight = 0
     metadataDraft = emptyMetadata()
     metadataDirty = false
+    formFields = []
+    formDrafts = {}
+    formFieldsLoading = false
+    formDirty = false
+    flattenFormsOnApply = false
     ocrPreview = ''
     ocrPreviewLabel = 'No OCR text yet'
     ocrLastDurationMs = null
@@ -1610,6 +1675,11 @@
     renderedPageHeight = 0
     metadataDraft = emptyMetadata()
     metadataDirty = false
+    formFields = []
+    formDrafts = {}
+    formFieldsLoading = false
+    formDirty = false
+    flattenFormsOnApply = false
     ocrPreview = ''
     ocrPreviewLabel = 'No OCR text yet'
     ocrLastDurationMs = null
@@ -1662,6 +1732,14 @@
   async function refreshWorkspaceContext(proxy: PdfProxy, bytes: Uint8Array) {
     const nextMetadataToken = ++metadataToken
     const nextThumbnailToken = ++thumbnailToken
+    const nextFormFieldToken = ++formFieldToken
+
+    if (workspace?.flags.hasForms && !workspace.flags.hasXfa) {
+      formFieldsLoading = true
+    } else {
+      formFieldsLoading = false
+      hydrateFormFields([])
+    }
 
     try {
       const metadata = await readMetadataFromDocument(bytes)
@@ -1684,6 +1762,23 @@
     } catch {
       if (nextThumbnailToken === thumbnailToken) {
         thumbnails = []
+      }
+    }
+
+    if (!workspace?.flags.hasForms || workspace.flags.hasXfa) {
+      return
+    }
+
+    try {
+      const nextFormFields = await readFormFieldsFromDocument(bytes)
+      if (nextFormFieldToken === formFieldToken) {
+        hydrateFormFields(nextFormFields)
+        formFieldsLoading = false
+      }
+    } catch {
+      if (nextFormFieldToken === formFieldToken) {
+        hydrateFormFields([])
+        formFieldsLoading = false
       }
     }
   }
@@ -1713,6 +1808,161 @@
         selectedTextSpanId = null
       }
     }
+  }
+
+  function cloneFormFieldValue(value: PdfFormFieldValue): PdfFormFieldValue {
+    return Array.isArray(value) ? [...value] : value
+  }
+
+  function normalizeFormFieldValueForCompare(field: PdfFormField, value: PdfFormFieldValue) {
+    if (field.kind === 'checkbox') {
+      return value === true ? '1' : '0'
+    }
+
+    if (field.multiSelect) {
+      const values = Array.isArray(value)
+        ? [...value]
+        : typeof value === 'string' && value.trim().length > 0
+          ? [value]
+          : []
+      return values.sort((left, right) => left.localeCompare(right)).join('\u0000')
+    }
+
+    if (typeof value === 'string') {
+      return value
+    }
+
+    return ''
+  }
+
+  function buildFormDrafts(fields: PdfFormField[]) {
+    const drafts: Record<string, PdfFormFieldValue> = {}
+
+    for (const field of fields) {
+      drafts[field.name] = cloneFormFieldValue(field.value)
+    }
+
+    return drafts
+  }
+
+  function hydrateFormFields(fields: PdfFormField[]) {
+    formFields = fields
+    formDrafts = buildFormDrafts(fields)
+    formDirty = false
+  }
+
+  function recomputeFormDirty(nextDrafts: Record<string, PdfFormFieldValue>) {
+    formDirty = formFields.some(
+      (field) =>
+        normalizeFormFieldValueForCompare(field, field.value) !==
+        normalizeFormFieldValueForCompare(field, nextDrafts[field.name] ?? null),
+    )
+  }
+
+  function setFormFieldDraft(fieldName: string, value: PdfFormFieldValue) {
+    const nextDrafts = {
+      ...formDrafts,
+      [fieldName]: cloneFormFieldValue(value),
+    }
+
+    formDrafts = nextDrafts
+    recomputeFormDirty(nextDrafts)
+  }
+
+  function getFormFieldDraftValue(field: PdfFormField) {
+    return formDrafts[field.name] ?? cloneFormFieldValue(field.value)
+  }
+
+  function getSingleFormFieldDraftValue(field: PdfFormField) {
+    const draftValue = getFormFieldDraftValue(field)
+
+    if (typeof draftValue === 'string') {
+      return draftValue
+    }
+
+    if (Array.isArray(draftValue)) {
+      return draftValue[0] ?? ''
+    }
+
+    return ''
+  }
+
+  function getCheckboxFormFieldDraftValue(field: PdfFormField) {
+    return getFormFieldDraftValue(field) === true
+  }
+
+  function getMultiSelectFormFieldDraftValue(field: PdfFormField) {
+    const draftValue = getFormFieldDraftValue(field)
+
+    if (Array.isArray(draftValue)) {
+      return draftValue
+    }
+
+    if (typeof draftValue === 'string' && draftValue.trim().length > 0) {
+      return [draftValue]
+    }
+
+    return []
+  }
+
+  function formatFormFieldKind(kind: PdfFormField['kind'], multiSelect: boolean) {
+    switch (kind) {
+      case 'text':
+        return 'Text'
+      case 'checkbox':
+        return 'Checkbox'
+      case 'radio':
+        return 'Radio'
+      case 'dropdown':
+        return multiSelect ? 'Multi-select' : 'Dropdown'
+      case 'option-list':
+        return multiSelect ? 'Multi-list' : 'List'
+      case 'signature':
+        return 'Signature'
+      case 'button':
+        return 'Button'
+      default:
+        return 'Field'
+    }
+  }
+
+  function formatFormFieldValueSummary(field: PdfFormField) {
+    const draftValue = getFormFieldDraftValue(field)
+
+    if (field.kind === 'checkbox') {
+      return draftValue === true ? 'Checked' : 'Unchecked'
+    }
+
+    if (field.multiSelect) {
+      const values = getMultiSelectFormFieldDraftValue(field)
+      return values.length > 0 ? values.join(', ') : 'No selection'
+    }
+
+    const value = getSingleFormFieldDraftValue(field).trim()
+    return value || 'Empty'
+  }
+
+  function updateTextFormFieldDraft(field: PdfFormField, value: string) {
+    const nextValue =
+      field.maxLength !== null && value.length > field.maxLength ? value.slice(0, field.maxLength) : value
+    setFormFieldDraft(field.name, nextValue)
+  }
+
+  function updateCheckboxFormFieldDraft(field: PdfFormField, checked: boolean) {
+    setFormFieldDraft(field.name, checked)
+  }
+
+  function updateMultiSelectFormFieldDraft(field: PdfFormField, select: HTMLSelectElement) {
+    const values = Array.from(select.selectedOptions, (option) => option.value)
+    setFormFieldDraft(field.name, values)
+  }
+
+  function resetFormFieldDrafts() {
+    hydrateFormFields(formFields)
+  }
+
+  function getFormFieldOptionsListId(fieldName: string) {
+    return `form-options-${fieldName.replace(/[^a-z0-9_-]/gi, '-')}`
   }
 
   function updateMetadataField(field: keyof PdfMetadataDraft, value: string) {
@@ -2034,6 +2284,189 @@
           <button on:click={exportDocumentHtml} disabled={busy || !workspace}>Export HTML</button>
           <button on:click={exportDocumentDocx} disabled={busy || !workspace}>Export DOCX</button>
         </div>
+      </div>
+    </details>
+
+    <details class="card dock-panel forms-panel" open={Boolean(workspace?.flags.hasForms)}>
+      <summary class="dock-summary">
+        <span>Forms</span>
+        <small>
+          {#if workspace?.flags.hasXfa}
+            XFA locked
+          {:else if formFieldsLoading}
+            Reading
+          {:else if formFields.length > 0}
+            {formFields.length} fields
+          {:else if workspace?.flags.hasForms}
+            No fields
+          {:else}
+            Idle
+          {/if}
+        </small>
+      </summary>
+      <div class="dock-body">
+        {#if workspace?.flags.hasXfa}
+          <div class="inspector-block">
+            <span class="meta-label">XFA Detected</span>
+            <strong>Read-only form package</strong>
+            <span class="muted">
+              This PDF uses XFA or a hybrid form package. Sampadan keeps those forms inspect-only for now.
+            </span>
+          </div>
+        {:else if workspace?.flags.hasForms}
+          <div class="section-head compact-head">
+            <h3>AcroForm Fields</h3>
+            <span class:modified-pill={formDirty} class="pill">
+              {formDirty ? 'Changed' : 'Synced'}
+            </span>
+          </div>
+
+          <label class="check-field">
+            <input class="check-input" type="checkbox" bind:checked={flattenFormsOnApply} disabled={busy || formFields.length === 0} />
+            <span>Flatten after apply</span>
+          </label>
+
+          {#if formFieldsLoading}
+            <p class="muted">Reading standard AcroForm fields from the current PDF.</p>
+          {:else if formFields.length > 0}
+            {#each formFields as field}
+              <div class="inspector-block form-field-card">
+                <div class="section-head compact-head">
+                  <h3>{field.label}</h3>
+                  <span class="pill">{formatFormFieldKind(field.kind, field.multiSelect)}</span>
+                </div>
+                <span class="muted">{field.name}</span>
+
+                {#if field.kind === 'checkbox'}
+                  <label class="check-field">
+                    <input
+                      class="check-input"
+                      type="checkbox"
+                      checked={getCheckboxFormFieldDraftValue(field)}
+                      disabled={busy || !field.editable}
+                      on:change={(event) => updateCheckboxFormFieldDraft(field, event.currentTarget.checked)}
+                    />
+                    <span>
+                      Form: {field.label}
+                      {field.required ? ' (required)' : ''}
+                    </span>
+                  </label>
+                {:else if field.multiSelect}
+                  <label class="field">
+                    <span class="field-label">Form: {field.label}</span>
+                    <select
+                      class="field-input form-multiselect"
+                      multiple
+                      size={Math.min(Math.max(field.options.length, 3), 6)}
+                      disabled={busy || !field.editable}
+                      on:change={(event) => updateMultiSelectFormFieldDraft(field, event.currentTarget)}
+                    >
+                      {#each field.options as option}
+                        <option value={option} selected={getMultiSelectFormFieldDraftValue(field).includes(option)}>{option}</option>
+                      {/each}
+                    </select>
+                  </label>
+                {:else if field.kind === 'radio' || field.kind === 'dropdown' || field.kind === 'option-list'}
+                  {#if field.kind === 'dropdown' && field.acceptsCustomText}
+                    <label class="field">
+                      <span class="field-label">Form: {field.label}</span>
+                      <input
+                        class="field-input"
+                        value={getSingleFormFieldDraftValue(field)}
+                        list={getFormFieldOptionsListId(field.name)}
+                        disabled={busy || !field.editable}
+                        on:input={(event) => updateTextFormFieldDraft(field, event.currentTarget.value)}
+                      />
+                      <datalist id={getFormFieldOptionsListId(field.name)}>
+                        {#each field.options as option}
+                          <option value={option}></option>
+                        {/each}
+                      </datalist>
+                    </label>
+                  {:else}
+                    <label class="field">
+                      <span class="field-label">Form: {field.label}</span>
+                      <select
+                        class="field-input"
+                        value={getSingleFormFieldDraftValue(field)}
+                        disabled={busy || !field.editable}
+                        on:change={(event) => updateTextFormFieldDraft(field, event.currentTarget.value)}
+                      >
+                        <option value="">No selection</option>
+                        {#each field.options as option}
+                          <option value={option}>{option}</option>
+                        {/each}
+                      </select>
+                    </label>
+                  {/if}
+                {:else}
+                  <label class="field">
+                    <span class="field-label">Form: {field.label}</span>
+                    {#if field.multiline}
+                      <textarea
+                        class="field-input note-body"
+                        value={getSingleFormFieldDraftValue(field)}
+                        disabled={busy || !field.editable}
+                        on:input={(event) => updateTextFormFieldDraft(field, event.currentTarget.value)}
+                      ></textarea>
+                    {:else}
+                      <input
+                        class="field-input"
+                        value={getSingleFormFieldDraftValue(field)}
+                        disabled={busy || !field.editable}
+                        on:input={(event) => updateTextFormFieldDraft(field, event.currentTarget.value)}
+                      />
+                    {/if}
+                  </label>
+                {/if}
+
+                <div class="stack-list">
+                  <span>Value: {formatFormFieldValueSummary(field)}</span>
+                  {#if field.required}
+                    <span>Required</span>
+                  {/if}
+                  {#if field.readOnly}
+                    <span>Read-only</span>
+                  {/if}
+                  {#if field.maxLength !== null}
+                    <span>Max length: {field.maxLength}</span>
+                  {/if}
+                  {#if field.password}
+                    <span>Password masking is defined on this field.</span>
+                  {/if}
+                  {#if field.combed}
+                    <span>Combed text layout is enabled.</span>
+                  {/if}
+                  {#each field.notes as note}
+                    <span>{note}</span>
+                  {/each}
+                </div>
+              </div>
+            {/each}
+
+            <div class="tool-grid">
+              <button
+                data-testid="apply-form-values-button"
+                on:click={applyFormFieldValues}
+                disabled={busy || !workspace || formFields.length === 0 || editableFormFields.length === 0 || !formDirty}
+              >
+                Apply Form Values
+              </button>
+              <button
+                data-testid="flatten-form-fields-button"
+                on:click={flattenFormFields}
+                disabled={busy || !workspace || formFields.length === 0}
+              >
+                Flatten Forms
+              </button>
+              <button on:click={resetFormFieldDrafts} disabled={busy || !formDirty}>Reset Drafts</button>
+            </div>
+          {:else}
+            <p class="muted">No editable standard AcroForm fields were found in this PDF.</p>
+          {/if}
+        {:else}
+          <p class="muted">Standard AcroForm fields will appear here when a fillable PDF is open.</p>
+        {/if}
       </div>
     </details>
 

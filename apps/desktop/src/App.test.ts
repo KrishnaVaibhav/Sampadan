@@ -97,6 +97,67 @@ vi.mock('./lib/operations/pdf-document', () => ({
   applyMetadataToDocument: vi.fn(async () => Uint8Array.from([1, 2, 3])),
 }))
 
+vi.mock('./lib/operations/pdf-forms', () => ({
+  readFormFieldsFromDocument: vi.fn(async () => [
+    {
+      name: 'applicant.fullName',
+      label: 'fullName',
+      kind: 'text',
+      value: 'Krishna Vaibhav',
+      options: [],
+      readOnly: false,
+      required: true,
+      exported: true,
+      multiline: false,
+      password: false,
+      combed: false,
+      maxLength: 64,
+      multiSelect: false,
+      editable: true,
+      acceptsCustomText: false,
+      notes: [],
+    },
+    {
+      name: 'approval.accepted',
+      label: 'accepted',
+      kind: 'checkbox',
+      value: true,
+      options: [],
+      readOnly: false,
+      required: false,
+      exported: true,
+      multiline: false,
+      password: false,
+      combed: false,
+      maxLength: null,
+      multiSelect: false,
+      editable: true,
+      acceptsCustomText: false,
+      notes: [],
+    },
+    {
+      name: 'contact.department',
+      label: 'department',
+      kind: 'dropdown',
+      value: 'Engineering',
+      options: ['Engineering', 'Product', 'Legal'],
+      readOnly: false,
+      required: false,
+      exported: true,
+      multiline: false,
+      password: false,
+      combed: false,
+      maxLength: null,
+      multiSelect: false,
+      editable: true,
+      acceptsCustomText: false,
+      notes: [],
+    },
+  ]),
+  applyFormFieldValuesToDocument: vi.fn(async () => Uint8Array.from([8, 8, 8, 8])),
+  flattenFormFieldsInDocument: vi.fn(async () => Uint8Array.from([8, 8, 8, 9])),
+}))
+
 vi.mock('./lib/session/recent-files', () => ({
   loadRecentPaths: vi.fn(() => ['C:/docs/recent.pdf']),
   rememberRecentPath: vi.fn((paths: string[], path: string) => [path, ...paths.filter((candidate) => candidate !== path)]),
@@ -330,6 +391,7 @@ describe('Sampadan desktop app regression suite', () => {
       'Export Trust Report',
       'Export Attachments',
       'Attach File',
+      'Flatten Forms',
       'Extract Range',
       'Split To Folder',
       'Insert PDF After',
@@ -662,6 +724,37 @@ describe('Sampadan desktop app regression suite', () => {
     await waitFor(() => {
       expect(screen.getByText('Replaced selected text on page 1')).toBeTruthy()
     })
+  })
+
+  test('applies AcroForm field edits through the local mutation pipeline', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect(screen.getByLabelText('Form: fullName')).toBeTruthy()
+    })
+
+    await user.clear(screen.getByLabelText('Form: fullName'))
+    await user.type(screen.getByLabelText('Form: fullName'), 'Ada Lovelace')
+    await user.click(screen.getByLabelText('Form: accepted'))
+    await user.selectOptions(screen.getByLabelText('Form: department'), 'Legal')
+    await user.click(screen.getByTestId('apply-form-values-button'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Applied form field values')).toBeTruthy()
+      expect(invokeMock).toHaveBeenCalledWith(
+        'inspect_pdf_bytes',
+        expect.objectContaining({
+          fileName: 'sample.pdf',
+          bytesBase64: expect.any(String),
+        }),
+      )
+    })
+
+    expectCamelCasePayloadKeys(getInvokePayloads('inspect_pdf_bytes'), ['fileName', 'bytesBase64'])
   })
 
   test('exports a protected copy through the local qpdf pipeline', async () => {

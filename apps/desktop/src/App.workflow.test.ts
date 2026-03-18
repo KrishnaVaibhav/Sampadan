@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 import type { LoadedPdfPayload, PdfTrustReport } from './lib/types'
-import { createSamplePdf, readPdfSummary } from './test/pdf-fixtures'
+import { createSampleAcroFormPdf, createSamplePdf, readPdfFormValues, readPdfSummary } from './test/pdf-fixtures'
 
 const { openDialogMock, saveDialogMock, invokeMock } = vi.hoisted(() => ({
   openDialogMock: vi.fn(),
@@ -340,6 +340,130 @@ describe('real PDF workflow actions', () => {
     })
 
     expect(screen.queryByText('Last error')).toBeNull()
+  })
+
+  test('fills and flattens real AcroForm fields through the desktop UI', async () => {
+    const formPath = 'C:/docs/form-workflow.pdf'
+    const formBytes = await createSampleAcroFormPdf()
+    const diskFiles = new Map<string, Uint8Array>([[formPath, formBytes]])
+    let currentBytes = formBytes
+
+    invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      switch (command) {
+        case 'get_ocr_status':
+          return {
+            available: false,
+            binaryPath: null,
+            version: null,
+            languages: [],
+            recommendedLanguage: 'eng',
+            missingReason: 'Tesseract not installed for this workflow test',
+          }
+        case 'get_qpdf_status':
+          return {
+            available: true,
+            binaryPath: 'C:/Program Files/qpdf 12.3.2/bin/qpdf.exe',
+            version: 'qpdf version 12.3.2',
+            missingReason: null,
+          }
+        case 'load_pdf': {
+          const path = String(args?.path ?? '')
+          const storedBytes = diskFiles.get(path)
+          if (!storedBytes) {
+            throw new Error(`No PDF fixture registered for ${path}`)
+          }
+          currentBytes = new Uint8Array(Array.from(storedBytes))
+          return buildPayload(currentBytes, 'form-workflow.pdf', path, {
+            flags: {
+              encrypted: false,
+              signed: false,
+              hasForms: true,
+              hasXfa: false,
+              hasJavascript: false,
+              hasAttachments: false,
+              tagged: false,
+              linearized: false,
+              likelyScanned: false,
+              mixedContent: false,
+            },
+          })
+        }
+        case 'inspect_pdf_bytes': {
+          const nextBytes = decodeBase64(String(args?.bytesBase64 ?? ''))
+          currentBytes = nextBytes
+          return buildPayload(nextBytes, String(args?.fileName ?? 'generated.pdf'), null, {
+            flags: {
+              encrypted: false,
+              signed: false,
+              hasForms: true,
+              hasXfa: false,
+              hasJavascript: false,
+              hasAttachments: false,
+              tagged: false,
+              linearized: false,
+              likelyScanned: false,
+              mixedContent: false,
+            },
+          })
+        }
+        case 'save_file_bytes': {
+          const path = String(args?.path ?? '')
+          const bytes = decodeBase64(String(args?.bytesBase64 ?? ''))
+          if (path.toLowerCase().endsWith('.pdf')) {
+            diskFiles.set(path, bytes)
+          }
+          return null
+        }
+        default:
+          throw new Error(`Unexpected invoke command: ${command}`)
+      }
+    })
+
+    openDialogMock.mockResolvedValue(formPath)
+    saveDialogMock.mockResolvedValue('C:/docs/form-workflow-saved.pdf')
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect(screen.getByLabelText('Form: fullName')).toBeTruthy()
+    })
+
+    await user.clear(screen.getByLabelText('Form: fullName'))
+    await user.type(screen.getByLabelText('Form: fullName'), 'Ada Lovelace')
+    await user.click(screen.getByLabelText('Form: accepted'))
+    await user.selectOptions(screen.getByLabelText('Form: department'), 'Legal')
+    await user.selectOptions(screen.getByLabelText('Form: status'), 'rejected')
+    await user.deselectOptions(screen.getByLabelText('Form: languages'), ['English', 'Hindi'])
+    await user.selectOptions(screen.getByLabelText('Form: languages'), 'French')
+    await user.click(screen.getByTestId('apply-form-values-button'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Applied form field values')).toBeTruthy()
+    })
+
+    const valuesAfterApply = await readPdfFormValues(currentBytes)
+    expect(valuesAfterApply['applicant.fullName']).toBe('Ada Lovelace')
+    expect(valuesAfterApply['approval.accepted']).toBe(false)
+    expect(valuesAfterApply['contact.department']).toBe('Legal')
+    expect(valuesAfterApply['contact.languages']).toEqual(['French'])
+    expect(valuesAfterApply['decision.status']).toBe('rejected')
+
+    await user.click(screen.getByTestId('flatten-form-fields-button'))
+    await waitFor(() => {
+      expect(screen.getByText('Flattened form fields')).toBeTruthy()
+    })
+
+    expect(await readPdfFormValues(currentBytes)).toEqual({})
+
+    await user.click(screen.getByRole('button', { name: 'Save As' }))
+    await waitFor(() => {
+      expect(diskFiles.has('C:/docs/form-workflow-saved.pdf')).toBe(true)
+    })
+
+    expectCamelCasePayloadKeys(getInvokePayloads('inspect_pdf_bytes'), ['fileName', 'bytesBase64'])
+    expectCamelCasePayloadKeys(getInvokePayloads('save_file_bytes'), ['path', 'bytesBase64'])
   })
 
   test('button flows mutate and export real PDF bytes without throwing', async () => {

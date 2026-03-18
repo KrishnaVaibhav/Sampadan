@@ -129,6 +129,43 @@ export interface PdfMetadataDraft {
   producer: string
 }
 
+export type PdfFormFieldKind =
+  | 'text'
+  | 'checkbox'
+  | 'radio'
+  | 'dropdown'
+  | 'option-list'
+  | 'signature'
+  | 'button'
+  | 'unknown'
+
+export type PdfFormFieldValue = string | boolean | string[] | null
+
+export interface PdfFormField {
+  name: string
+  label: string
+  kind: PdfFormFieldKind
+  value: PdfFormFieldValue
+  options: string[]
+  readOnly: boolean
+  required: boolean
+  exported: boolean
+  multiline: boolean
+  password: boolean
+  combed: boolean
+  maxLength: number | null
+  multiSelect: boolean
+  editable: boolean
+  acceptsCustomText: boolean
+  notes: string[]
+}
+
+export interface PdfFormFieldUpdate {
+  name: string
+  kind: PdfFormFieldKind
+  value: PdfFormFieldValue
+}
+
 export interface PageThumbnail {
   pageNumber: number
   dataUrl: string

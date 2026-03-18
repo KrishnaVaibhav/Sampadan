@@ -151,11 +151,19 @@ Planned split:
 
 ### Mutate Document
 
-1. UI triggers an operation such as rotate, reorder, merge, insert, watermark, image stamping, review notes, or page numbering.
+1. UI triggers an operation such as rotate, reorder, merge, insert, watermark, image stamping, review notes, page numbering, or AcroForm filling.
 2. Frontend uses the document mutation layer to produce a new byte stream.
 3. Rust re-inspects the updated bytes.
 4. Frontend replaces the active workspace with the new classified document.
 5. Document remains in memory until explicitly saved.
+
+### Fill Standard Forms
+
+1. Frontend reads standard AcroForm fields through the local PDF mutation layer.
+2. The rail exposes compact field editors for text, checkbox, radio, dropdown, and option-list values.
+3. Applying changes writes the new field values into the PDF bytes locally through `pdf-lib`.
+4. Optional flattening converts the current widget appearances into page content and removes interactive fields.
+5. XFA and hybrid form packages remain inspect-only until a dedicated subsystem exists for them.
 
 ### Save Document
 
@@ -225,18 +233,22 @@ These are the modules the codebase should grow into instead of adding more logic
   local Markdown, HTML, and DOCX generation from extracted PDF text
 - `src/lib/operations/pdf-document.ts`
   merge, insert, rotate, extract, reorder, split, watermark, image stamping, review notes, true page-edit overlays, restricted content-stream text rewrites, text-targeted replacement fallback, embedded attachments, page numbering, metadata, and export helpers
+- `src/lib/operations/pdf-forms.ts`
+  standard AcroForm field discovery, field-value application, and form flattening
 - `src/lib/types.ts`
-  shared desktop payloads for trust, OCR, qpdf runtime state, and protected-copy options
+  shared desktop payloads for trust, forms, OCR, qpdf runtime state, and protected-copy options
 - `src/lib/ocr/ocr-client.ts`
   OCR status probing and native OCR text/PDF invocation bridge
 - `src/App.test.ts`
-  regression suite for critical desktop UI actions and trust/OCR flows
+  regression suite for critical desktop UI actions and trust/OCR/form flows
 - `src/App.workflow.test.ts`
-  real-PDF workflow regression for open, encrypted unlock, mutate, metadata, save, merge, and export paths
+  real-PDF workflow regression for open, encrypted unlock, mutate, form fill/flatten, metadata, save, merge, and export paths
 - `src/test/pdf-fixtures.ts`
-  generated real-PDF fixtures and document summary helpers used by regression tests
+  generated real-PDF fixtures, including fillable AcroForm samples, plus document summary helpers used by regression tests
 - `src/lib/operations/pdf-document.test.ts`
   real-byte coverage for structural edits and metadata round-trips
+- `src/lib/operations/pdf-forms.test.ts`
+  real-byte coverage for standard AcroForm field discovery, fill, and flatten flows
 - `src/lib/conversion/`
   PNG export, image pipelines, later DOCX/HTML export adapters
 - `src/lib/components/`
@@ -319,6 +331,7 @@ Status on March 18, 2026:
 - full-document OCR preview implemented
 - OCR runtime detection and language listing implemented
 - searchable OCR PDF copy generation implemented
+- standard AcroForm discovery, local field filling, and flattening implemented for text, checkbox, radio, dropdown, and option-list fields
 - native signature/trust report inspection implemented
 - native attachment inspection implemented
 - embedded attachment insertion implemented through the frontend PDF mutation layer
