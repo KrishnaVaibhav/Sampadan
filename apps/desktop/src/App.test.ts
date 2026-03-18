@@ -850,9 +850,13 @@ describe('Sampadan desktop app regression suite', () => {
     })
 
     await user.click(screen.getByLabelText('Target text: Page 1 line'))
-    await user.clear(screen.getByLabelText('Edit Text'))
-    await user.type(screen.getByLabelText('Edit Text'), 'Updated page 1 line')
-    await user.click(screen.getByTestId('replace-selected-text-button'))
+    await waitFor(() => {
+      expect(screen.getByTestId('inline-text-editor-card')).toBeTruthy()
+    })
+
+    await user.clear(screen.getByLabelText('Quick Replace Text'))
+    await user.type(screen.getByLabelText('Quick Replace Text'), 'Updated page 1 line')
+    await user.click(screen.getByTestId('inline-replace-button'))
 
     await waitFor(() => {
       expect(screen.getByText('Replaced selected text on page 1')).toBeTruthy()

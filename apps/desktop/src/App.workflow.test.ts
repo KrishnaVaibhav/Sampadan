@@ -657,9 +657,12 @@ describe('real PDF workflow actions', () => {
     })
 
     await user.click(screen.getByLabelText('Target text: Body content for page 2'))
-    await user.clear(screen.getByLabelText('Edit Text'))
-    await user.type(screen.getByLabelText('Edit Text'), 'Selected replacement text')
-    await user.click(screen.getByTestId('replace-selected-text-button'))
+    await waitFor(() => {
+      expect(screen.getByTestId('inline-text-editor-card')).toBeTruthy()
+    })
+    await user.clear(screen.getByLabelText('Quick Replace Text'))
+    await user.type(screen.getByLabelText('Quick Replace Text'), 'Selected replacement text')
+    await user.click(screen.getByTestId('inline-replace-button'))
     await waitFor(() => {
       expect(screen.getByText(/Replaced selected text on page 2/)).toBeTruthy()
     })
@@ -670,7 +673,7 @@ describe('real PDF workflow actions', () => {
     await user.click(screen.getByLabelText('Target text: Body content for page 2'))
     await user.clear(screen.getByLabelText('Note Text'))
     await user.type(screen.getByLabelText('Note Text'), 'Highlight this selected line for review.')
-    await user.click(screen.getByTestId('highlight-selected-text-button'))
+    await user.click(screen.getByRole('button', { name: 'Highlight Here' }))
     await waitFor(async () => {
       const annotationsAfterHighlight = await readPdfPageAnnotations(currentBytes, 2)
       expect(annotationsAfterHighlight.map((annotation) => annotation.subtype)).toContain('Highlight')

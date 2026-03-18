@@ -206,6 +206,8 @@
   let selectedTextSpanId: string | null = null
   let selectedTextSpan: PdfPageTextSpan | null = null
   let textTargetMode = false
+  let inlineTextEditorOpen = false
+  let inlineTextEditor: HTMLTextAreaElement | null = null
   let rangeExpression = '1'
   let metadataDraft = emptyMetadata()
   let metadataDirty = false
@@ -252,6 +254,9 @@
   $: viewerStatusLabel = workspace ? `Page ${currentPage} of ${workspace.pageCount}` : pendingEncryptedPdf ? 'Locked until unlocked' : 'Idle'
   $: selectedAnnotation = currentPageAnnotations.find((annotation) => annotation.id === selectedAnnotationId) ?? null
   $: selectedTextSpan = currentPageTextSpans.find((span) => span.id === selectedTextSpanId) ?? null
+  $: if (!selectedTextSpan && inlineTextEditorOpen) {
+    inlineTextEditorOpen = false
+  }
   $: thumbnailMap = new Map(thumbnails.map((thumbnail) => [thumbnail.pageNumber, thumbnail]))
   $: ocrAvailableLanguages = ocrStatus?.languages ?? []
   $: ocrReady = ocrStatus?.available ?? false
@@ -284,6 +289,18 @@
 
     const handleKeyDown = (event: KeyboardEvent) => {
       const modifier = event.ctrlKey || event.metaKey
+
+      if (textTargetMode && inlineTextEditorOpen && selectedTextSpan && event.key === 'Escape') {
+        event.preventDefault()
+        clearSelectedTextTarget()
+        return
+      }
+
+      if (textTargetMode && inlineTextEditorOpen && selectedTextSpan && modifier && event.key === 'Enter') {
+        event.preventDefault()
+        void replaceSelectedTextTarget()
+        return
+      }
 
       if (modifier && event.key.toLowerCase() === 'o') {
         event.preventDefault()
@@ -1577,6 +1594,7 @@
         fileName: currentWorkspace.fileName,
         current: currentPage,
       })
+      inlineTextEditorOpen = false
 
       statusTone = 'idle'
       status =
@@ -2282,10 +2300,14 @@
 
   function toggleTextTargetMode() {
     textTargetMode = !textTargetMode
+    if (!textTargetMode) {
+      clearSelectedTextTarget()
+    }
   }
 
   function clearSelectedTextTarget() {
     selectedTextSpanId = null
+    inlineTextEditorOpen = false
   }
 
   function selectAnnotation(annotation: PdfPageAnnotationOverlay) {
@@ -2329,8 +2351,9 @@
     return closestTone
   }
 
-  function selectTextTarget(span: PdfPageTextSpan) {
+  async function selectTextTarget(span: PdfPageTextSpan, options: { focusEditor?: boolean } = {}) {
     selectedTextSpanId = span.id
+    inlineTextEditorOpen = true
     textEditContent = span.text
     textEditX = span.xPercent.toFixed(2)
     textEditY = span.yPercent.toFixed(2)
@@ -2338,6 +2361,29 @@
     textEditHeight = Math.max(span.heightPercent, 5).toFixed(2)
     textEditFontSize = Math.round(span.fontSize).toString()
     textEditAlignment = 'left'
+
+    if (options.focusEditor ?? true) {
+      await tick()
+      inlineTextEditor?.focus()
+      inlineTextEditor?.select()
+    }
+  }
+
+  function resolveInlineTextEditorPosition() {
+    if (!selectedTextSpan) {
+      return null
+    }
+
+    const cardWidthPercent = 26
+    const shouldPlaceRight = selectedTextSpan.xPercent + selectedTextSpan.widthPercent + cardWidthPercent <= 98
+    const xPercent = shouldPlaceRight
+      ? clamp(selectedTextSpan.xPercent + selectedTextSpan.widthPercent + 1.4, 2, 98 - cardWidthPercent)
+      : clamp(selectedTextSpan.xPercent - cardWidthPercent - 1.4, 2, 98 - cardWidthPercent)
+
+    return {
+      xPercent,
+      yPercent: clamp(selectedTextSpan.yPercent - 1.2, 1.5, 84),
+    }
   }
 
   function handlePageDragStart(pageNumber: number, event: DragEvent) {
@@ -2898,10 +2944,10 @@
             <h3>Target Existing Text</h3>
             <span class="pill">{currentPageTextSpans.length}</span>
           </div>
-          <span class="muted">Show page text targets, click the text you want, then replace that exact region.</span>
+          <span class="muted">Turn on direct text edit, click the page text you want, then edit from the inline card.</span>
           <div class="tool-grid">
             <button data-testid="toggle-text-target-button" on:click={toggleTextTargetMode} disabled={busy || !workspace}>
-              {textTargetMode ? 'Hide Text Targets' : 'Show Text Targets'}
+              {textTargetMode ? 'Hide Direct Edit Targets' : 'Direct Text Edit'}
             </button>
             <button
               data-testid="replace-selected-text-button"
@@ -3214,11 +3260,67 @@
                       style:top={`${span.yPercent}%`}
                       style:width={`${span.widthPercent}%`}
                       style:height={`${Math.max(span.heightPercent, 0.8)}%`}
-                      on:click={() => selectTextTarget(span)}
+                      on:click={() => void selectTextTarget(span)}
                       aria-label={`Target text: ${span.text}`}
+                      title={`Edit text: ${span.text}`}
                     ></button>
                   {/each}
                 </div>
+              {/if}
+              {#if textTargetMode && inlineTextEditorOpen && selectedTextSpan}
+                {@const inlineEditorPosition = resolveInlineTextEditorPosition()}
+                {#if inlineEditorPosition}
+                  <section
+                    class="inline-text-editor"
+                    data-testid="inline-text-editor-card"
+                    style:left={`${inlineEditorPosition.xPercent}%`}
+                    style:top={`${inlineEditorPosition.yPercent}%`}
+                  >
+                    <div class="inline-text-editor-head">
+                      <span class="eyebrow">Direct Text Edit</span>
+                      <button
+                        type="button"
+                        class="ghost-button inline-close-button"
+                        data-testid="inline-close-editor-button"
+                        on:click={clearSelectedTextTarget}
+                        disabled={busy}
+                      >
+                        Close
+                      </button>
+                    </div>
+                    <strong class="inline-text-editor-source">{selectedTextSpan.text}</strong>
+                    <label class="field inline-field">
+                      <span class="field-label">Quick Replace Text</span>
+                      <textarea
+                        bind:this={inlineTextEditor}
+                        bind:value={textEditContent}
+                        class="field-input inline-textarea"
+                        rows="4"
+                        disabled={busy}
+                      ></textarea>
+                    </label>
+                    <div class="inline-text-editor-actions">
+                      <button
+                        type="button"
+                        data-testid="inline-replace-button"
+                        on:click={replaceSelectedTextTarget}
+                        disabled={busy || !textEditContent.trim()}
+                      >
+                        Replace Here
+                      </button>
+                      <button type="button" on:click={() => addSelectedTextMarkup('highlight')} disabled={busy}>
+                        Highlight Here
+                      </button>
+                      <button type="button" on:click={() => addSelectedTextMarkup('underline')} disabled={busy}>
+                        Underline
+                      </button>
+                      <button type="button" on:click={() => addSelectedTextMarkup('strikeout')} disabled={busy}>
+                        Strike Out
+                      </button>
+                    </div>
+                    <span class="muted inline-hint">Cmd/Ctrl+Enter applies the replacement. Esc clears the target.</span>
+                  </section>
+                {/if}
               {/if}
             </div>
           </div>

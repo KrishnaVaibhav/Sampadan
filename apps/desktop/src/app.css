@@ -711,6 +711,7 @@ button:disabled {
   background: rgba(255, 190, 92, 0.16);
   box-shadow: 0 0 0 1px rgba(14, 20, 28, 0.2);
   pointer-events: auto;
+  cursor: text;
 }
 
 .text-target-hitbox:hover:not(:disabled),
@@ -718,6 +719,61 @@ button:disabled {
   border-color: rgba(99, 178, 255, 0.92);
   background: rgba(99, 178, 255, 0.22);
   transform: none;
+}
+
+.inline-text-editor {
+  position: absolute;
+  z-index: 4;
+  width: min(26rem, 28vw);
+  min-width: 15rem;
+  max-width: calc(100% - 1rem);
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.8rem;
+  border-radius: 16px;
+  border: 1px solid rgba(99, 178, 255, 0.28);
+  background:
+    linear-gradient(180deg, rgba(14, 21, 29, 0.98), rgba(10, 16, 22, 0.96));
+  box-shadow: 0 16px 38px rgba(0, 0, 0, 0.32);
+}
+
+.inline-text-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.inline-close-button {
+  min-height: 0;
+  padding: 0.36rem 0.58rem;
+}
+
+.inline-text-editor-source {
+  display: block;
+  font-size: 0.9rem;
+  line-height: 1.35;
+  color: var(--text-main);
+  overflow-wrap: anywhere;
+}
+
+.inline-field {
+  gap: 0.25rem;
+}
+
+.inline-textarea {
+  min-height: 5.8rem;
+  resize: vertical;
+}
+
+.inline-text-editor-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.4rem;
+}
+
+.inline-hint {
+  font-size: 0.74rem;
 }
 
 .compact-tool-grid {
