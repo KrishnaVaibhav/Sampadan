@@ -1,0 +1,261 @@
+# Sampadan Codebase Architecture
+
+## Purpose
+
+This file is the durable reference for how the codebase is organized, which layers own which responsibilities, and how new features should be added without collapsing the app into a monolith.
+
+The product target is:
+
+- local-first PDF workstation
+- no mandatory servers
+- cross-platform desktop delivery for Windows, Linux, and macOS
+- later capability reuse for a browser surface where practical
+
+## Product Principles
+
+- Documents stay on the user's device by default.
+- The UI never performs privileged file IO directly.
+- Heavy PDF work runs outside the main UI thread.
+- Rendering and mutation are separate concerns.
+- Unsafe or obscure PDF features are classified before mutation.
+- New features should land behind clear module boundaries.
+
+## Current Stack
+
+- Desktop shell: `Tauri 2`
+- Frontend: `Svelte 5 + TypeScript + Vite`
+- Native layer: `Rust`
+- Viewer/rendering: `PDF.js`
+- PDF mutation today: `pdf-lib`
+- Native PDF pipeline planned: `qpdf`, `PDFium`, `Tesseract`
+
+## Repository Layout
+
+```text
+Sampadan/
+  apps/
+    desktop/
+      src/
+      src-tauri/
+  docs/
+    architecture/
+  crates/
+  packages/
+```
+
+## Layer Ownership
+
+### 1. UI Layer
+
+Path: `apps/desktop/src/`
+
+Owns:
+
+- application shell
+- toolbar and page controls
+- canvas viewer host
+- user workflow state
+- document session status
+
+Does not own:
+
+- direct disk writes
+- trusted PDF inspection
+- long-running OCR or signing jobs
+
+### 2. Command Bridge
+
+Boundary: Tauri invoke commands between `src/` and `src-tauri/`
+
+Owns:
+
+- validated requests from UI to native code
+- serialization of document bytes and metadata
+- future job progress events
+
+Rules:
+
+- keep command inputs explicit
+- return structured payloads, not ad hoc strings
+- keep security-sensitive logic in Rust
+
+### 3. Native Core
+
+Path: `apps/desktop/src-tauri/src/`
+
+Owns:
+
+- local file reads and writes
+- PDF fingerprinting and classification
+- safe save pipeline
+- future orchestration for OCR, signatures, repair, and conversions
+
+Current commands:
+
+- `load_pdf`
+- `inspect_pdf_bytes`
+- `save_file_bytes`
+
+### 4. Document Engine Layer
+
+Current:
+
+- `PDF.js` for viewing and page rendering
+- `pdf-lib` for merge, extract, rotate, and reorder
+
+Planned split:
+
+- `PDF.js`: viewport, text layer, selection, search UI
+- `pdf-lib`: lightweight structural edits
+- `qpdf`: repair, normalization, encryption, advanced page operations
+- `PDFium`: high-fidelity rendering, printing, thumbnails, difficult PDFs
+- `Tesseract`: OCR pipeline
+
+## Runtime Flow
+
+### Open Document
+
+1. UI selects a file path through Tauri dialog.
+2. Rust reads the file and classifies PDF capabilities and risks.
+3. Rust returns document bytes plus metadata.
+4. Frontend loads bytes into `PDF.js`.
+5. Viewer renders the active page to canvas.
+
+### Mutate Document
+
+1. UI triggers an operation such as rotate, reorder, or merge.
+2. Frontend uses the document mutation layer to produce a new byte stream.
+3. Rust re-inspects the updated bytes.
+4. Frontend replaces the active workspace with the new classified document.
+5. Document remains in memory until explicitly saved.
+
+### Save Document
+
+1. UI resolves a target path.
+2. Frontend sends bytes to Rust.
+3. Rust writes staged output to disk.
+4. UI reloads the saved path as the canonical workspace state.
+
+## State Model
+
+The frontend keeps one active `WorkspaceDocument`.
+
+Core fields:
+
+- `path`
+- `fileName`
+- `bytes`
+- `byteLength`
+- `pageCount`
+- `version`
+- `flags`
+- `modified`
+- `source`
+
+Classification flags currently tracked:
+
+- encrypted
+- signed
+- forms
+- XFA
+- JavaScript
+- attachments
+- tagged
+- linearized
+- likely scanned
+- mixed content
+
+## Planned Module Expansion
+
+These are the modules the codebase should grow into instead of adding more logic to `App.svelte`.
+
+### Frontend packages
+
+- `src/lib/session/`
+  Session loading, save orchestration, recent files, command wrappers
+- `src/lib/viewer/`
+  PDF.js canvas rendering, thumbnails, search, text extraction
+- `src/lib/operations/`
+  merge, rotate, extract, reorder, export helpers
+- `src/lib/conversion/`
+  PNG export, image pipelines, later DOCX/HTML export adapters
+- `src/lib/components/`
+  toolbar, page strip, inspector, status surfaces
+
+### Native modules
+
+- `src-tauri/src/commands.rs`
+  Tauri entry points only
+- `src-tauri/src/pdf/`
+  document inspection and capability detection
+- `src-tauri/src/io/`
+  save strategy, temp files, path handling
+- `src-tauri/src/jobs/`
+  background job orchestration and progress reporting
+- `src-tauri/src/signatures/`
+  signature detection, validation, timestamps
+- `src-tauri/src/ocr/`
+  Tesseract invocation and image preprocessing
+
+## Feature Delivery Rules
+
+When adding a new feature:
+
+1. Decide whether it is viewer-only, structural-edit, conversion, OCR, or trust/security work.
+2. Put PDF byte mutations in a dedicated operation module, not directly inside UI markup.
+3. If the feature touches disk, certificates, signatures, or bundled native tools, route through Rust.
+4. If the feature is CPU-heavy, design it as a background job from the start.
+5. Update this file when a new subsystem or dependency becomes canonical.
+
+## Near-Term Roadmap
+
+### Milestone 1
+
+- desktop workspace shell
+- open/save
+- render current page
+- rotate page
+- move page
+- extract page
+- merge PDFs
+- export PNG
+
+### Milestone 2
+
+- thumbnail strip
+- split/range extraction
+- page delete/insert
+- drag reordering
+- metadata editor
+- better undo-safe save flow
+
+### Milestone 3
+
+- OCR with Tesseract
+- searchable scan enhancement
+- signature validation
+- attachment inspection
+- encryption controls
+
+### Milestone 4
+
+- PDF to image batch conversion
+- PDF to DOCX or structured export strategy
+- PDF/A validation
+- repair pipeline with `qpdf`
+- high-fidelity print/export via `PDFium`
+
+## Build and Release Strategy
+
+- local development happens in `apps/desktop`
+- Windows builds can be validated locally on this machine
+- Linux and macOS builds should run in GitHub Actions matrix jobs
+- native dependencies must be bundled per platform and documented when added
+
+## Architectural Debt To Watch
+
+- avoid turning `App.svelte` into the final home for all business logic
+- do not bind the save pipeline to browser-only APIs
+- do not mix document classification with UI display formatting
+- avoid assuming all PDFs are mutable with the same engine
+- isolate any future AGPL-sensitive dependency decisions before adoption
