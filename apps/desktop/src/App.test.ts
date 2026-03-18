@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
-import type { LoadedPdfPayload } from './lib/types'
+import type { LoadedPdfPayload, PdfTrustReport } from './lib/types'
 
 const { openDialogMock, saveDialogMock, invokeMock } = vi.hoisted(() => ({
   openDialogMock: vi.fn(),
@@ -79,7 +79,7 @@ vi.mock('./lib/session/recent-files', () => ({
 
 import App from './App.svelte'
 
-const sampleTrustReport = {
+const sampleTrustReport: PdfTrustReport = {
   signatureCount: 1,
   signatures: [
     {
@@ -95,9 +95,17 @@ const sampleTrustReport = {
       coversWholeDocument: false,
       isTimestamp: false,
       docMdp: true,
+      integrityStatus: 'verified',
+      integrityMessage: 'Detached CMS signature verified locally against the PDF ByteRange content.',
       notes: ['Contains DocMDP certification policy'],
     },
   ],
+  signatureValidationRuntime: {
+    available: true,
+    binaryPath: 'openssl',
+    version: 'OpenSSL 3.0.18 30 Sep 2025',
+    missingReason: null,
+  },
   attachmentCount: 1,
   attachments: [
     {
@@ -237,6 +245,8 @@ describe('Sampadan desktop app regression suite', () => {
     expect(screen.getByText('AES-256 standard security')).toBeTruthy()
     expect(screen.getByText('1 embedded file')).toBeTruthy()
     expect(screen.getByText('1 signature detected')).toBeTruthy()
+    expect(screen.getByText('OpenSSL detected')).toBeTruthy()
+    expect(screen.getByText('Integrity: Verified locally')).toBeTruthy()
   })
 
   test('exports the trust report through the local save pipeline', async () => {

@@ -21,6 +21,7 @@ This package contains the local-first desktop application for Sampadan.
 - run local OCR through Tesseract when available on the device
 - create searchable OCR PDF copies from scanned pages
 - inspect signature, attachment, and encryption trust metadata with local report export
+- cryptographically verify detached CMS PDF signatures locally when OpenSSL is available
 
 ## Development
 
@@ -42,3 +43,7 @@ npm run tauri:build
 ## OCR
 
 The desktop app probes the local machine for a Tesseract binary at runtime. On Windows it checks standard install locations such as `C:\Program Files\Tesseract-OCR\tesseract.exe` if `tesseract` is not already on `PATH`.
+
+## Signature Validation
+
+The desktop app probes the local machine for an OpenSSL binary when it encounters signed PDFs. If `openssl` is not already on `PATH`, you can point Sampadan at a local install with `SAMPADAN_OPENSSL_PATH`.

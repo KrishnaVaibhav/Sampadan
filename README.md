@@ -24,6 +24,7 @@ Current local features include:
 - run local OCR on the current page or a full document when Tesseract is installed
 - create searchable OCR PDF copies locally
 - inspect PDF signatures, attachments, and encryption signals
+- cryptographically verify detached CMS PDF signatures locally when OpenSSL is available
 - metadata inspection and editing
 
 ## Architecture
@@ -43,6 +44,8 @@ npm run tauri:dev
 ```
 
 Local OCR currently uses a machine-local Tesseract runtime. On Windows, the desktop app will detect standard installs such as `C:\Program Files\Tesseract-OCR\tesseract.exe`.
+
+Local signature verification currently uses a machine-local OpenSSL runtime. If `openssl` is not on `PATH`, Sampadan also supports `SAMPADAN_OPENSSL_PATH`.
 
 Production desktop bundles are created with:
 

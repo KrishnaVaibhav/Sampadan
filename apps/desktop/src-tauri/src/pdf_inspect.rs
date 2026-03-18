@@ -1,3 +1,4 @@
+use crate::signature_validation;
 use serde::Serialize;
 use std::collections::HashSet;
 
@@ -31,6 +32,8 @@ pub struct PdfSignatureSummary {
   pub covers_whole_document: bool,
   pub is_timestamp: bool,
   pub doc_mdp: bool,
+  pub integrity_status: String,
+  pub integrity_message: Option<String>,
   pub notes: Vec<String>,
 }
 
@@ -39,10 +42,20 @@ pub struct PdfSignatureSummary {
 pub struct PdfTrustReport {
   pub signature_count: usize,
   pub signatures: Vec<PdfSignatureSummary>,
+  pub signature_validation_runtime: Option<PdfSignatureValidationRuntime>,
   pub attachment_count: usize,
   pub attachments: Vec<PdfAttachmentSummary>,
   pub encryption: PdfEncryptionSummary,
   pub recommendations: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfSignatureValidationRuntime {
+  pub available: bool,
+  pub binary_path: Option<String>,
+  pub version: Option<String>,
+  pub missing_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -69,6 +82,12 @@ pub struct PdfEncryptionSummary {
   pub string_filter: Option<String>,
   pub encrypt_metadata: Option<bool>,
   pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ExtractedSignature {
+  summary: PdfSignatureSummary,
+  contents_bytes: Option<Vec<u8>>,
 }
 
 pub fn extract_pdf_version(bytes: &[u8]) -> String {
@@ -111,7 +130,12 @@ pub fn classify_pdf(bytes: &[u8]) -> PdfFlags {
 }
 
 pub fn build_trust_report(bytes: &[u8], flags: &PdfFlags) -> PdfTrustReport {
-  let signatures = extract_signature_summaries(bytes);
+  let mut extracted_signatures = extract_signatures(bytes);
+  let signature_validation_runtime = validate_signatures(bytes, &mut extracted_signatures);
+  let signatures = extracted_signatures
+    .into_iter()
+    .map(|signature| signature.summary)
+    .collect::<Vec<_>>();
   let attachments = extract_attachment_summaries(bytes);
   let encryption = build_encryption_summary(bytes, flags);
   let mut recommendations = Vec::new();
@@ -128,6 +152,49 @@ pub fn build_trust_report(bytes: &[u8], flags: &PdfFlags) -> PdfTrustReport {
       "Saving edits will create a new PDF revision and may invalidate existing signatures."
         .to_string(),
     );
+  }
+
+  if signatures
+    .iter()
+    .any(|signature| signature.integrity_status == "verified")
+  {
+    recommendations.push(
+      "At least one detached CMS signature was verified locally against the PDF ByteRange content."
+        .to_string(),
+    );
+  }
+
+  if signatures
+    .iter()
+    .any(|signature| signature.integrity_status == "failed")
+  {
+    recommendations.push(
+      "At least one signature failed cryptographic verification against the current PDF bytes."
+        .to_string(),
+    );
+  }
+
+  if signatures
+    .iter()
+    .any(|signature| signature.integrity_status == "unsupported")
+  {
+    recommendations.push(
+      "Some signatures use SubFilter variants that Sampadan does not validate yet."
+        .to_string(),
+    );
+  }
+
+  if let Some(runtime) = &signature_validation_runtime {
+    if !runtime.available {
+      recommendations.push(
+        runtime
+          .missing_reason
+          .clone()
+          .unwrap_or_else(|| {
+            "Cryptographic signature validation is unavailable on this device.".to_string()
+          }),
+      );
+    }
   }
 
   if signatures.iter().any(|signature| !signature.covers_whole_document) {
@@ -182,6 +249,7 @@ pub fn build_trust_report(bytes: &[u8], flags: &PdfFlags) -> PdfTrustReport {
   PdfTrustReport {
     signature_count: signatures.len(),
     signatures,
+    signature_validation_runtime,
     attachment_count: attachments.len(),
     attachments,
     encryption,
@@ -189,7 +257,7 @@ pub fn build_trust_report(bytes: &[u8], flags: &PdfFlags) -> PdfTrustReport {
   }
 }
 
-fn extract_signature_summaries(bytes: &[u8]) -> Vec<PdfSignatureSummary> {
+fn extract_signatures(bytes: &[u8]) -> Vec<ExtractedSignature> {
   let mut hint_positions = find_occurrences(bytes, b"/ByteRange");
   if hint_positions.is_empty() {
     hint_positions = find_occurrences(bytes, b"/Type /Sig");
@@ -217,7 +285,7 @@ fn extract_signature_summaries(bytes: &[u8]) -> Vec<PdfSignatureSummary> {
     let context_end = (hint + 2048).min(bytes.len());
     let context_text = String::from_utf8_lossy(&bytes[context_start..context_end]);
 
-    signatures.push(parse_signature_summary(
+    signatures.push(parse_signature_entry(
       &dictionary_text,
       &context_text,
       bytes.len() as u64,
@@ -227,20 +295,21 @@ fn extract_signature_summaries(bytes: &[u8]) -> Vec<PdfSignatureSummary> {
   signatures
 }
 
-fn parse_signature_summary(
+fn parse_signature_entry(
   dictionary_text: &str,
   context_text: &str,
   file_length: u64,
-) -> PdfSignatureSummary {
+) -> ExtractedSignature {
   let byte_range = extract_byte_range(dictionary_text);
   let covers_whole_document = byte_range
     .as_ref()
-    .map(|values| values.len() == 4 && values[0] == 0 && values[2].saturating_add(values[3]) == file_length)
+    .map(|values| covers_whole_document(values, file_length))
     .unwrap_or(false);
   let sub_filter = extract_name_value(dictionary_text, "/SubFilter");
   let is_timestamp = dictionary_text.contains("/Type /DocTimeStamp")
     || sub_filter.as_deref() == Some("ETSI.RFC3161");
   let doc_mdp = dictionary_text.contains("/DocMDP") || dictionary_text.contains("/TransformMethod /DocMDP");
+  let contents_bytes = extract_contents_bytes(dictionary_text);
 
   let mut notes = Vec::new();
   if is_timestamp {
@@ -253,22 +322,135 @@ fn parse_signature_summary(
     notes.push("Signature byte range does not end at the final byte of the current file".to_string());
   }
 
-  PdfSignatureSummary {
-    field_name: extract_string_value(context_text, "/T"),
-    signer_name: extract_string_value(dictionary_text, "/Name")
-      .or_else(|| extract_string_value(context_text, "/TU")),
-    reason: extract_string_value(dictionary_text, "/Reason"),
-    location: extract_string_value(dictionary_text, "/Location"),
-    contact_info: extract_string_value(dictionary_text, "/ContactInfo"),
-    modification_time: extract_string_value(dictionary_text, "/M"),
-    filter: extract_name_value(dictionary_text, "/Filter"),
-    sub_filter,
-    byte_range,
-    covers_whole_document,
-    is_timestamp,
-    doc_mdp,
-    notes,
+  if contents_bytes.is_none() {
+    notes.push("Signature /Contents payload could not be decoded for cryptographic verification".to_string());
   }
+
+  ExtractedSignature {
+    summary: PdfSignatureSummary {
+      field_name: extract_string_value(context_text, "/T"),
+      signer_name: extract_string_value(dictionary_text, "/Name")
+        .or_else(|| extract_string_value(context_text, "/TU")),
+      reason: extract_string_value(dictionary_text, "/Reason"),
+      location: extract_string_value(dictionary_text, "/Location"),
+      contact_info: extract_string_value(dictionary_text, "/ContactInfo"),
+      modification_time: extract_string_value(dictionary_text, "/M"),
+      filter: extract_name_value(dictionary_text, "/Filter"),
+      sub_filter,
+      byte_range,
+      covers_whole_document,
+      is_timestamp,
+      doc_mdp,
+      integrity_status: "not-checked".to_string(),
+      integrity_message: None,
+      notes,
+    },
+    contents_bytes,
+  }
+}
+
+fn validate_signatures(
+  bytes: &[u8],
+  signatures: &mut [ExtractedSignature],
+) -> Option<PdfSignatureValidationRuntime> {
+  if signatures.is_empty() {
+    return None;
+  }
+
+  let mut eligible_indices = Vec::new();
+  for (index, signature) in signatures.iter_mut().enumerate() {
+    if signature.summary.byte_range.is_none() {
+      signature.summary.integrity_status = "missing-data".to_string();
+      signature.summary.integrity_message =
+        Some("Signature dictionary does not contain a usable /ByteRange entry.".to_string());
+      continue;
+    }
+
+    if signature.contents_bytes.is_none() {
+      signature.summary.integrity_status = "missing-data".to_string();
+      signature.summary.integrity_message =
+        Some("Signature dictionary does not contain a decodable /Contents payload.".to_string());
+      continue;
+    }
+
+    eligible_indices.push(index);
+  }
+
+  if eligible_indices.is_empty() {
+    return None;
+  }
+
+  let openssl = match signature_validation::resolve_openssl() {
+    Ok(openssl) => openssl,
+    Err(reason) => {
+      for index in eligible_indices {
+        signatures[index].summary.integrity_status = "unavailable".to_string();
+        signatures[index].summary.integrity_message = Some(reason.clone());
+      }
+
+      return Some(PdfSignatureValidationRuntime {
+        available: false,
+        binary_path: None,
+        version: None,
+        missing_reason: Some(reason),
+      });
+    }
+  };
+
+  for index in eligible_indices {
+    let signature = &mut signatures[index];
+    let byte_range = signature.summary.byte_range.clone().unwrap_or_default();
+    let contents_bytes = signature.contents_bytes.as_deref().unwrap_or_default();
+
+    let signed_content = match signature_validation::build_signed_content(bytes, &byte_range) {
+      Ok(signed_content) => signed_content,
+      Err(error) => {
+        signature.summary.integrity_status = "missing-data".to_string();
+        signature.summary.integrity_message = Some(error);
+        continue;
+      }
+    };
+
+    let validation = signature_validation::validate_detached_signature(
+      &openssl,
+      contents_bytes,
+      &signed_content,
+      signature.summary.sub_filter.as_deref(),
+    );
+    signature.summary.integrity_status = validation.integrity_status;
+    signature.summary.integrity_message = validation.integrity_message;
+  }
+
+  let runtime = signature_validation::runtime_from_resolved(&openssl);
+  Some(PdfSignatureValidationRuntime {
+    available: runtime.available,
+    binary_path: runtime.binary_path,
+    version: runtime.version,
+    missing_reason: runtime.missing_reason,
+  })
+}
+
+fn covers_whole_document(byte_range: &[u64], file_length: u64) -> bool {
+  if byte_range.len() < 2 || byte_range.len() % 2 != 0 || byte_range[0] != 0 {
+    return false;
+  }
+
+  let mut last_end = 0u64;
+  for pair in byte_range.chunks_exact(2) {
+    let start = pair[0];
+    let length = pair[1];
+    let end = start.saturating_add(length);
+    if start < last_end {
+      return false;
+    }
+    last_end = end;
+  }
+
+  last_end == file_length
+}
+
+fn extract_contents_bytes(text: &str) -> Option<Vec<u8>> {
+  extract_raw_bytes_value(text, "/Contents")
 }
 
 fn extract_attachment_summaries(bytes: &[u8]) -> Vec<PdfAttachmentSummary> {
@@ -594,6 +776,116 @@ fn extract_hex_string_value(text: &str) -> Option<String> {
   }
 
   String::from_utf8(decoded).ok().map(|value| value.trim().to_string())
+}
+
+fn extract_raw_bytes_value(text: &str, key: &str) -> Option<Vec<u8>> {
+  let tail = find_key_tail(text, key)?;
+  let bytes = tail.as_bytes();
+
+  if bytes.first().copied() == Some(b'<') && bytes.get(1).copied() != Some(b'<') {
+    let end = tail.find('>')?;
+    let raw = tail[1..end]
+      .chars()
+      .filter(|character| !character.is_whitespace())
+      .collect::<String>();
+
+    if raw.is_empty() {
+      return None;
+    }
+
+    let mut normalized = raw;
+    if normalized.len() % 2 == 1 {
+      normalized.push('0');
+    }
+
+    let mut decoded = Vec::new();
+    let mut index = 0usize;
+    while index + 1 < normalized.len() {
+      let byte = u8::from_str_radix(&normalized[index..index + 2], 16).ok()?;
+      decoded.push(byte);
+      index += 2;
+    }
+
+    return Some(decoded);
+  }
+
+  if bytes.first().copied() != Some(b'(') {
+    return None;
+  }
+
+  let mut depth = 1usize;
+  let mut cursor = 1usize;
+  let mut decoded = Vec::new();
+
+  while cursor < bytes.len() {
+    let byte = bytes[cursor];
+    if byte == b'\\' {
+      cursor += 1;
+      if cursor >= bytes.len() {
+        break;
+      }
+
+      let escaped = bytes[cursor];
+      match escaped {
+        b'n' => decoded.push(b'\n'),
+        b'r' => decoded.push(b'\r'),
+        b't' => decoded.push(b'\t'),
+        b'b' => decoded.push(0x08),
+        b'f' => decoded.push(0x0C),
+        b'(' | b')' | b'\\' => decoded.push(escaped),
+        b'\n' => {}
+        b'\r' => {
+          if cursor + 1 < bytes.len() && bytes[cursor + 1] == b'\n' {
+            cursor += 1;
+          }
+        }
+        b'0'..=b'7' => {
+          let mut octal = vec![escaped];
+          while cursor + 1 < bytes.len() && octal.len() < 3 {
+            let next = bytes[cursor + 1];
+            if !(b'0'..=b'7').contains(&next) {
+              break;
+            }
+            cursor += 1;
+            octal.push(next);
+          }
+
+          let value = u8::from_str_radix(
+            &String::from_utf8_lossy(&octal),
+            8,
+          )
+          .ok()?;
+          decoded.push(value);
+        }
+        other => decoded.push(other),
+      }
+
+      cursor += 1;
+      continue;
+    }
+
+    if byte == b'(' {
+      depth += 1;
+      decoded.push(byte);
+      cursor += 1;
+      continue;
+    }
+
+    if byte == b')' {
+      depth = depth.saturating_sub(1);
+      if depth == 0 {
+        return Some(decoded);
+      }
+      decoded.push(byte);
+      cursor += 1;
+      continue;
+    }
+
+    decoded.push(byte);
+    cursor += 1;
+  }
+
+  None
 }
 
 fn extract_integer_value(text: &str, key: &str) -> Option<i32> {

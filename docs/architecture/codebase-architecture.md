@@ -29,6 +29,7 @@ The product target is:
 - Viewer/rendering: `PDF.js`
 - PDF mutation today: `pdf-lib`
 - Native OCR today: local `Tesseract` runtime detection and invocation
+- Native signature validation today: local `OpenSSL` runtime detection and detached CMS verification
 - Native PDF pipeline planned: `qpdf`, `PDFium`
 
 ## Repository Layout
@@ -102,7 +103,7 @@ Current commands:
 - `run_ocr_image`
 - `run_ocr_pdf`
 
-The same inspection pass now returns a native trust report with parsed signature, attachment, and encryption details when they are available.
+The same inspection pass now returns a native trust report with parsed signature, attachment, and encryption details when they are available. When a signed PDF exposes a detached CMS payload and a usable `ByteRange`, Sampadan also attempts local cryptographic verification through `OpenSSL`.
 
 ### 4. Document Engine Layer
 
@@ -208,9 +209,11 @@ These are the modules the codebase should grow into instead of adding more logic
 - `src-tauri/src/commands.rs`
   Tauri entry points only
 - `src-tauri/src/pdf_inspect.rs`
-  PDF versioning, classification, signature parsing, and trust report generation
+  PDF versioning, classification, signature parsing, trust report generation, and validation orchestration
 - `src-tauri/src/ocr.rs`
   local Tesseract detection, language enumeration, and image OCR text/PDF execution
+- `src-tauri/src/signature_validation.rs`
+  local OpenSSL detection, detached CMS verification, and signature byte-range assembly
 - `src-tauri/src/pdf/`
   document inspection and capability detection
 - `src-tauri/src/io/`
@@ -279,8 +282,9 @@ Status on March 18, 2026:
 - native signature/trust report inspection implemented
 - native attachment inspection implemented
 - native encryption summary inspection implemented
+- detached CMS signature integrity verification implemented through local OpenSSL
 - regression tests now cover critical viewer, OCR, trust, edit, and export controls
-- cryptographic signature validation and write-side encryption controls still pending
+- certificate chain trust, revocation, timestamps, and write-side encryption controls still pending
 
 ### Milestone 4
 

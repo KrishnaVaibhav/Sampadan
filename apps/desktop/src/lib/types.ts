@@ -24,7 +24,16 @@ export interface PdfSignatureSummary {
   coversWholeDocument: boolean
   isTimestamp: boolean
   docMdp: boolean
+  integrityStatus: 'not-checked' | 'verified' | 'failed' | 'unsupported' | 'unavailable' | 'missing-data'
+  integrityMessage: string | null
   notes: string[]
+}
+
+export interface PdfSignatureValidationRuntime {
+  available: boolean
+  binaryPath: string | null
+  version: string | null
+  missingReason: string | null
 }
 
 export interface PdfAttachmentSummary {
@@ -52,6 +61,7 @@ export interface PdfEncryptionSummary {
 export interface PdfTrustReport {
   signatureCount: number
   signatures: PdfSignatureSummary[]
+  signatureValidationRuntime: PdfSignatureValidationRuntime | null
   attachmentCount: number
   attachments: PdfAttachmentSummary[]
   encryption: PdfEncryptionSummary

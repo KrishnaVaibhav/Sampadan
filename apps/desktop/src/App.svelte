@@ -95,6 +95,7 @@
   $: ocrAvailableLanguages = ocrStatus?.languages ?? []
   $: ocrReady = ocrStatus?.available ?? false
   $: signatureSummaries = workspace?.trustReport.signatures ?? []
+  $: signatureValidationRuntime = workspace?.trustReport.signatureValidationRuntime ?? null
   $: attachmentSummaries = workspace?.trustReport.attachments ?? []
   $: encryptionSummary = workspace?.trustReport.encryption ?? null
   $: trustRecommendations = workspace?.trustReport.recommendations ?? []
@@ -971,6 +972,23 @@
     return ocrStatus?.recommendedLanguage ?? 'eng'
   }
 
+  function formatSignatureIntegrityLabel(status: string) {
+    switch (status) {
+      case 'verified':
+        return 'Verified locally'
+      case 'failed':
+        return 'Verification failed'
+      case 'unsupported':
+        return 'Unsupported format'
+      case 'unavailable':
+        return 'Validator unavailable'
+      case 'missing-data':
+        return 'Missing signature data'
+      default:
+        return 'Not checked'
+    }
+  }
+
   function buildTrustReportPayload(document: WorkspaceDocument): {
     fileName: string
     path: string | null
@@ -1333,6 +1351,21 @@
             </div>
           </div>
 
+          {#if signatureValidationRuntime}
+            <div class="inspector-block">
+              <span class="meta-label">Signature Validation</span>
+              <strong>{signatureValidationRuntime.available ? 'OpenSSL detected' : 'OpenSSL unavailable'}</strong>
+              <div class="stack-list">
+                <span class="muted">
+                  {signatureValidationRuntime.binaryPath ?? signatureValidationRuntime.missingReason ?? 'Validator state unavailable'}
+                </span>
+                {#if signatureValidationRuntime.version}
+                  <span>{signatureValidationRuntime.version}</span>
+                {/if}
+              </div>
+            </div>
+          {/if}
+
           {#if encryptionSummary?.encrypted}
             <div class="inspector-block">
               <span class="meta-label">Encryption</span>
@@ -1421,6 +1454,10 @@
                   {#if signature.byteRange}
                     <span>ByteRange: {signature.byteRange.join(', ')}</span>
                   {/if}
+                  <span>Integrity: {formatSignatureIntegrityLabel(signature.integrityStatus)}</span>
+                  {#if signature.integrityMessage}
+                    <span>{signature.integrityMessage}</span>
+                  {/if}
                   <span>
                     Coverage: {signature.coversWholeDocument ? 'covers final file bytes' : 'partial or stale coverage'}
                   </span>
@@ -1446,7 +1483,9 @@
               <span>File IO: Rust + Tauri</span>
               <span>OCR: {ocrReady ? `Tesseract ${ocrStatus?.version ?? 'ready'}` : 'Install local Tesseract'}</span>
               <span>Searchable OCR PDF: local generated copy</span>
-              <span>Trust: signatures, attachments, and encryption summary</span>
+              <span>
+                Trust: structural analysis plus local OpenSSL-backed detached signature verification when available
+              </span>
             </div>
           </div>
         {:else}
