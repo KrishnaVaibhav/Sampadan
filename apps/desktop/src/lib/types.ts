@@ -61,6 +61,14 @@ export interface PdfAttachmentSummary {
   notes: string[]
 }
 
+export interface ExtractedPdfAttachmentPayload {
+  fileName: string
+  description: string | null
+  relationship: string | null
+  bytesBase64: string
+  notes: string[]
+}
+
 export interface PdfEncryptionSummary {
   encrypted: boolean
   handler: string | null

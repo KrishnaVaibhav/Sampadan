@@ -100,11 +100,13 @@ Current commands:
 - `load_pdf`
 - `inspect_pdf_bytes`
 - `save_file_bytes`
+- `extract_pdf_attachments`
 - `get_ocr_status`
 - `run_ocr_image`
 - `run_ocr_pdf`
 
 The same inspection pass now returns a native trust report with parsed signature, attachment, and encryption details when they are available. When a signed PDF exposes a detached CMS payload and a usable `ByteRange`, Sampadan also attempts local cryptographic verification through `OpenSSL`, inventories embedded signer certificates, and tries a local CA-store chain validation. Revocation is not checked yet.
+Embedded file export also routes through the native layer so attachment parsing and stream decoding stay outside the UI thread.
 
 ### 4. Document Engine Layer
 

@@ -1,6 +1,7 @@
 use crate::signature_validation;
+use flate2::read::ZlibDecoder;
 use serde::Serialize;
-use std::collections::HashSet;
+use std::{collections::HashSet, io::Read};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,9 +105,28 @@ pub struct PdfCertificateSummary {
 }
 
 #[derive(Debug, Clone)]
+pub struct ExtractedPdfAttachment {
+  pub file_name: String,
+  pub description: Option<String>,
+  pub relationship: Option<String>,
+  pub bytes: Vec<u8>,
+  pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
 struct ExtractedSignature {
   summary: PdfSignatureSummary,
   contents_bytes: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone)]
+struct AttachmentCandidate {
+  file_name: Option<String>,
+  description: Option<String>,
+  relationship: Option<String>,
+  embedded: bool,
+  embedded_ref: Option<(u32, u16)>,
+  notes: Vec<String>,
 }
 
 pub fn extract_pdf_version(bytes: &[u8]) -> String {
@@ -547,7 +567,85 @@ fn extract_contents_bytes(text: &str) -> Option<Vec<u8>> {
   extract_raw_bytes_value(text, "/Contents")
 }
 
+pub fn extract_pdf_attachments(bytes: &[u8]) -> Result<Vec<ExtractedPdfAttachment>, String> {
+  let candidates = collect_attachment_candidates(bytes);
+  if candidates.is_empty() {
+    return Err("No embedded attachments were found in this PDF.".to_string());
+  }
+
+  let mut extracted = Vec::new();
+  let mut errors = Vec::new();
+
+  for (index, candidate) in candidates.into_iter().enumerate() {
+    if !candidate.embedded {
+      errors.push(format!(
+        "{} is referenced but does not expose an embedded file stream.",
+        candidate
+          .file_name
+          .clone()
+          .unwrap_or_else(|| format!("Attachment {}", index + 1))
+      ));
+      continue;
+    }
+
+    let Some((object_number, generation_number)) = candidate.embedded_ref else {
+      errors.push(format!(
+        "{} does not expose a readable embedded file reference.",
+        candidate
+          .file_name
+          .clone()
+          .unwrap_or_else(|| format!("Attachment {}", index + 1))
+      ));
+      continue;
+    };
+
+    match extract_attachment_stream(bytes, object_number, generation_number) {
+      Ok((attachment_bytes, mut stream_notes)) => {
+        let fallback_name = format!("attachment-{:03}.bin", index + 1);
+        let file_name = candidate.file_name.unwrap_or(fallback_name);
+        let mut notes = candidate.notes;
+        notes.append(&mut stream_notes);
+
+        extracted.push(ExtractedPdfAttachment {
+          file_name,
+          description: candidate.description,
+          relationship: candidate.relationship,
+          bytes: attachment_bytes,
+          notes,
+        });
+      }
+      Err(error) => {
+        errors.push(format!(
+          "{} could not be extracted: {error}",
+          candidate
+            .file_name
+            .unwrap_or_else(|| format!("Attachment {}", index + 1))
+        ));
+      }
+    }
+  }
+
+  if extracted.is_empty() {
+    return Err(errors.join(" "));
+  }
+
+  Ok(extracted)
+}
+
 fn extract_attachment_summaries(bytes: &[u8]) -> Vec<PdfAttachmentSummary> {
+  collect_attachment_candidates(bytes)
+    .into_iter()
+    .map(|candidate| PdfAttachmentSummary {
+      file_name: candidate.file_name,
+      description: candidate.description,
+      relationship: candidate.relationship,
+      embedded: candidate.embedded,
+      notes: candidate.notes,
+    })
+    .collect()
+}
+
+fn collect_attachment_candidates(bytes: &[u8]) -> Vec<AttachmentCandidate> {
   let mut hint_positions = find_occurrences(bytes, b"/Type /Filespec");
   if hint_positions.is_empty() {
     hint_positions = find_occurrences(bytes, b"/Filespec");
@@ -575,6 +673,7 @@ fn extract_attachment_summaries(bytes: &[u8]) -> Vec<PdfAttachmentSummary> {
     let description = extract_string_value(&dictionary_text, "/Desc");
     let relationship = extract_name_value(&dictionary_text, "/AFRelationship");
     let embedded = dictionary_text.contains("/EF");
+    let embedded_ref = extract_embedded_file_reference(&dictionary_text);
 
     if file_name.is_none() && description.is_none() && !embedded {
       continue;
@@ -588,16 +687,164 @@ fn extract_attachment_summaries(bytes: &[u8]) -> Vec<PdfAttachmentSummary> {
       notes.push(format!("Attachment relationship: {relationship_value}"));
     }
 
-    attachments.push(PdfAttachmentSummary {
+    attachments.push(AttachmentCandidate {
       file_name,
       description,
       relationship,
       embedded,
+      embedded_ref,
       notes,
     });
   }
 
   attachments
+}
+
+fn extract_embedded_file_reference(dictionary_text: &str) -> Option<(u32, u16)> {
+  let ef_dictionary = extract_inline_dictionary_value(dictionary_text, "/EF")?;
+  extract_object_reference(ef_dictionary, "/UF")
+    .or_else(|| extract_object_reference(ef_dictionary, "/F"))
+}
+
+fn extract_inline_dictionary_value<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+  let tail = find_key_tail(text, key)?;
+  let bytes = tail.as_bytes();
+  if bytes.len() < 2 || bytes[0] != b'<' || bytes[1] != b'<' {
+    return None;
+  }
+
+  let mut depth = 0usize;
+  let mut index = 0usize;
+
+  while index + 1 < bytes.len() {
+    if bytes[index] == b'<' && bytes[index + 1] == b'<' {
+      depth += 1;
+      index += 2;
+      continue;
+    }
+
+    if bytes[index] == b'>' && bytes[index + 1] == b'>' {
+      depth = depth.saturating_sub(1);
+      index += 2;
+      if depth == 0 {
+        return Some(&tail[..index]);
+      }
+      continue;
+    }
+
+    index += 1;
+  }
+
+  None
+}
+
+fn extract_object_reference(text: &str, key: &str) -> Option<(u32, u16)> {
+  let tail = find_key_tail(text, key)?;
+  let mut tokens = tail.split_whitespace();
+  let object_number = tokens.next()?.parse::<u32>().ok()?;
+  let generation_number = tokens.next()?.parse::<u16>().ok()?;
+  let marker = tokens.next()?;
+
+  if marker == "R" {
+    Some((object_number, generation_number))
+  } else {
+    None
+  }
+}
+
+fn extract_attachment_stream(
+  bytes: &[u8],
+  object_number: u32,
+  generation_number: u16,
+) -> Result<(Vec<u8>, Vec<String>), String> {
+  let marker = format!("{object_number} {generation_number} obj");
+  let positions = find_occurrences(bytes, marker.as_bytes());
+
+  for position in positions {
+    if let Some(extracted) = try_extract_attachment_stream_at(bytes, position) {
+      return extracted;
+    }
+  }
+
+  Err(format!(
+    "Embedded file object {object_number} {generation_number} R was not found."
+  ))
+}
+
+fn try_extract_attachment_stream_at(
+  bytes: &[u8],
+  object_position: usize,
+) -> Option<Result<(Vec<u8>, Vec<String>), String>> {
+  let search_limit = (object_position + 512 * 1024).min(bytes.len());
+  let object_slice = &bytes[object_position..search_limit];
+  let stream_offset = find_occurrences(object_slice, b"stream").into_iter().next()?;
+  let stream_marker = object_position + stream_offset;
+  let (dictionary_start, dictionary_end) =
+    extract_dictionary_bounds(bytes, stream_marker, 8 * 1024, stream_marker.saturating_sub(object_position) + 512)?;
+  let dictionary_text = String::from_utf8_lossy(&bytes[dictionary_start..dictionary_end]).to_string();
+  let stream_start = skip_stream_line_break(bytes, stream_marker + "stream".len());
+  let raw_stream = match extract_stream_data(bytes, stream_start, &dictionary_text) {
+    Ok(raw_stream) => raw_stream,
+    Err(error) => return Some(Err(error)),
+  };
+
+  Some(decode_attachment_stream(&raw_stream, &dictionary_text))
+}
+
+fn skip_stream_line_break(bytes: &[u8], mut index: usize) -> usize {
+  if bytes.get(index) == Some(&b'\r') && bytes.get(index + 1) == Some(&b'\n') {
+    index += 2;
+  } else if matches!(bytes.get(index), Some(b'\r' | b'\n')) {
+    index += 1;
+  }
+
+  index
+}
+
+fn extract_stream_data(
+  bytes: &[u8],
+  stream_start: usize,
+  dictionary_text: &str,
+) -> Result<Vec<u8>, String> {
+  if let Some(length) = extract_integer_value(dictionary_text, "/Length") {
+    let length = usize::try_from(length.max(0)).unwrap_or_default();
+    let stream_end = stream_start.saturating_add(length);
+    if stream_end <= bytes.len() {
+      return Ok(bytes[stream_start..stream_end].to_vec());
+    }
+  }
+
+  let tail = &bytes[stream_start..];
+  let endstream_offset = find_occurrences(tail, b"endstream")
+    .into_iter()
+    .next()
+    .ok_or_else(|| "Attachment stream does not terminate with endstream.".to_string())?;
+
+  Ok(tail[..endstream_offset].to_vec())
+}
+
+fn decode_attachment_stream(
+  raw_stream: &[u8],
+  dictionary_text: &str,
+) -> Result<(Vec<u8>, Vec<String>), String> {
+  let mut notes = Vec::new();
+  if !dictionary_text.contains("/Filter") {
+    return Ok((raw_stream.to_vec(), notes));
+  }
+
+  if dictionary_text.contains("/FlateDecode") {
+    let mut decoder = ZlibDecoder::new(raw_stream);
+    let mut decoded = Vec::new();
+    decoder
+      .read_to_end(&mut decoded)
+      .map_err(|error| format!("Failed to decode Flate attachment stream: {error}"))?;
+    notes.push("Decoded Flate-compressed attachment stream".to_string());
+    return Ok((decoded, notes));
+  }
+
+  let filter = extract_name_value(dictionary_text, "/Filter")
+    .unwrap_or_else(|| "unknown filter".to_string());
+  Err(format!("Unsupported attachment stream filter /{filter}."))
 }
 
 fn build_encryption_summary(bytes: &[u8], flags: &PdfFlags) -> PdfEncryptionSummary {
@@ -1153,9 +1400,11 @@ fn count_occurrences(text: &str, needles: &[&str]) -> usize {
 mod tests {
   use super::{
     build_trust_report, classify_pdf, decode_pdf_literal_string, extract_bool_value,
-    extract_byte_range, extract_integer_value, extract_name_value, extract_string_value,
-    find_occurrences, infer_encryption_algorithm,
+    extract_byte_range, extract_integer_value, extract_name_value, extract_pdf_attachments,
+    extract_string_value, find_occurrences, infer_encryption_algorithm,
   };
+  use flate2::{write::ZlibEncoder, Compression};
+  use std::io::Write;
 
   #[test]
   fn extracts_name_and_literal_values() {
@@ -1271,6 +1520,54 @@ endobj
     assert_eq!(
       infer_encryption_algorithm(Some("<< /CFM /AESV3 >>"), Some(6), Some(256), None, None).as_deref(),
       Some("AES-256 standard security")
+    );
+  }
+
+  #[test]
+  fn extract_pdf_attachments_returns_embedded_files() {
+    let bytes = br#"%PDF-1.7
+1 0 obj
+<<
+/Type /Filespec
+/F (report.txt)
+/EF << /F 7 0 R >>
+>>
+endobj
+7 0 obj
+<< /Type /EmbeddedFile /Length 12 >>
+stream
+hello world!
+endstream
+endobj
+"#;
+
+    let attachments = extract_pdf_attachments(bytes).expect("attachments should extract");
+    assert_eq!(attachments.len(), 1);
+    assert_eq!(attachments[0].file_name, "report.txt");
+    assert_eq!(attachments[0].bytes, b"hello world!");
+  }
+
+  #[test]
+  fn extract_pdf_attachments_decodes_flate_streams() {
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(b"spreadsheet-bytes").unwrap();
+    let compressed = encoder.finish().unwrap();
+    let mut bytes = format!(
+      "%PDF-1.7\n1 0 obj\n<< /Type /Filespec /F (report.xlsx) /EF << /F 7 0 R >> >>\nendobj\n7 0 obj\n<< /Type /EmbeddedFile /Length {} /Filter /FlateDecode >>\nstream\n",
+      compressed.len()
+    )
+    .into_bytes();
+    bytes.extend_from_slice(&compressed);
+    bytes.extend_from_slice(b"endstream\nendobj\n");
+
+    let attachments = extract_pdf_attachments(&bytes).expect("flate attachment should decode");
+    assert_eq!(attachments[0].file_name, "report.xlsx");
+    assert_eq!(attachments[0].bytes, b"spreadsheet-bytes");
+    assert!(
+      attachments[0]
+        .notes
+        .iter()
+        .any(|note| note.contains("Flate-compressed"))
     );
   }
 }

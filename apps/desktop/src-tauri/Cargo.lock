@@ -2951,6 +2951,7 @@ name = "sampadan-desktop"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "flate2",
  "log",
  "serde",
  "serde_json",

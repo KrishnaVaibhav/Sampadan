@@ -216,6 +216,16 @@ beforeEach(() => {
         return createPayload()
       case 'save_file_bytes':
         return null
+      case 'extract_pdf_attachments':
+        return [
+          {
+            fileName: 'report.xlsx',
+            description: 'Quarterly workbook',
+            relationship: 'Data',
+            bytesBase64: encodeBase64('attachment-bytes'),
+            notes: ['Embedded file stream reference present'],
+          },
+        ]
       case 'inspect_pdf_bytes':
         return createPayload((args?.fileName as string | undefined) ?? 'generated.pdf', null)
       case 'run_ocr_image':
@@ -263,6 +273,7 @@ describe('Sampadan desktop app regression suite', () => {
       'Save As',
       'Export Text',
       'Export Trust Report',
+      'Export Attachments',
       'Extract Range',
       'Split To Folder',
       'Insert PDF After',
@@ -317,6 +328,41 @@ describe('Sampadan desktop app regression suite', () => {
       )
     })
 
+    expectCamelCasePayloadKeys(getInvokePayloads('save_file_bytes'), ['path', 'bytesBase64'])
+  })
+
+  test('exports embedded attachments through the local save pipeline', async () => {
+    openDialogMock
+      .mockResolvedValueOnce('C:/docs/sample.pdf')
+      .mockResolvedValueOnce('C:/exports/attachments')
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect(screen.getByText('1 embedded file')).toBeTruthy()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Export Attachments' }))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        'extract_pdf_attachments',
+        expect.objectContaining({
+          bytesBase64: expect.any(String),
+        }),
+      )
+      expect(invokeMock).toHaveBeenCalledWith(
+        'save_file_bytes',
+        expect.objectContaining({
+          path: 'C:/exports/attachments/report.xlsx',
+          bytesBase64: expect.any(String),
+        }),
+      )
+    })
+
+    expectCamelCasePayloadKeys(getInvokePayloads('extract_pdf_attachments'), ['bytesBase64'])
     expectCamelCasePayloadKeys(getInvokePayloads('save_file_bytes'), ['path', 'bytesBase64'])
   })
 

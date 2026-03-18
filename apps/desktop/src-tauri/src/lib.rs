@@ -11,6 +11,7 @@ pub fn run() {
       commands::load_pdf,
       commands::inspect_pdf_bytes,
       commands::save_file_bytes,
+      commands::extract_pdf_attachments,
       commands::get_ocr_status,
       commands::run_ocr_image,
       commands::run_ocr_pdf

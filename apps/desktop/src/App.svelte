@@ -35,6 +35,7 @@
   } from './lib/pdf-utils'
   import { loadRecentPaths, rememberRecentPath } from './lib/session/recent-files'
   import type {
+    ExtractedPdfAttachmentPayload,
     LoadedPdfPayload,
     OcrStatusPayload,
     PageThumbnail,
@@ -622,6 +623,48 @@
       status = `Exported ${fileNameFromPath(targetPath)}`
     } catch (error) {
       reportError(error, 'Failed to export the trust report')
+    } finally {
+      busy = false
+    }
+  }
+
+  async function exportEmbeddedAttachments() {
+    if (!workspace || busy || attachmentSummaries.length === 0) return
+
+    const selection = await openDialog({
+      directory: true,
+      multiple: false,
+      title: 'Choose attachment export folder',
+    })
+    const [directory] = normalizeSelection(selection)
+    if (!directory) return
+
+    busy = true
+    statusTone = 'busy'
+    status = `Exporting ${attachmentSummaries.length} attachment${attachmentSummaries.length === 1 ? '' : 's'}`
+    lastError = null
+
+    try {
+      const attachments = await invoke<ExtractedPdfAttachmentPayload[]>('extract_pdf_attachments', {
+        bytesBase64: bytesToBase64(workspace.bytes),
+      })
+
+      if (attachments.length === 0) {
+        throw new Error('No extractable embedded attachments were returned.')
+      }
+
+      for (const [index, attachment] of attachments.entries()) {
+        const fileName = attachment.fileName.trim() || `attachment-${String(index + 1).padStart(3, '0')}.bin`
+        await invoke('save_file_bytes', {
+          path: joinPath(directory, fileName),
+          bytesBase64: attachment.bytesBase64,
+        })
+      }
+
+      statusTone = 'idle'
+      status = `Exported ${attachments.length} attachment${attachments.length === 1 ? '' : 's'}`
+    } catch (error) {
+      reportError(error, 'Failed to export embedded attachments')
     } finally {
       busy = false
     }
@@ -1643,7 +1686,13 @@
 
           {#if attachmentSummaries.length > 0}
             <div class="inspector-block">
-              <span class="meta-label">Attachments</span>
+              <div class="section-head compact-head">
+                <h3>Attachments</h3>
+                <button on:click={exportEmbeddedAttachments} disabled={busy || !workspace || attachmentSummaries.length === 0}>
+                  Export Attachments
+                </button>
+              </div>
+              <span class="meta-label">Embedded files</span>
               <strong>{attachmentSummaries.length} embedded file{attachmentSummaries.length === 1 ? '' : 's'}</strong>
               {#each attachmentSummaries as attachment}
                 <div class="stack-list attachment-entry">
