@@ -29,7 +29,7 @@ The product target is:
 - Viewer/rendering: `PDF.js`
 - PDF mutation today: `pdf-lib`
 - Native OCR today: local `Tesseract` runtime detection and invocation
-- Native protected-copy export today: local `qpdf` runtime detection and AES-256 protected-copy generation
+- Native `qpdf` work today: local runtime detection, encrypted-PDF unlock/decrypt flow, and AES-256 protected-copy generation
 - Native signature validation today: local `OpenSSL` runtime detection, detached CMS verification, and signer certificate inspection
 - Native PDF pipeline planned: deeper `qpdf` repair/normalization plus `PDFium`
 
@@ -102,6 +102,7 @@ Current commands:
 - `load_file_bytes`
 - `inspect_pdf_bytes`
 - `get_qpdf_status`
+- `decrypt_pdf_bytes`
 - `protect_pdf_bytes`
 - `save_file_bytes`
 - `extract_pdf_attachments`
@@ -111,7 +112,7 @@ Current commands:
 
 The same inspection pass now returns a native trust report with parsed signature, attachment, and encryption details when they are available. When a signed PDF exposes a detached CMS payload and a usable `ByteRange`, Sampadan also attempts local cryptographic verification through `OpenSSL`, inventories embedded signer certificates, and tries a local CA-store chain validation. Revocation is not checked yet.
 Embedded file export also routes through the native layer so attachment parsing and stream decoding stay outside the UI thread.
-Protected-copy export also routes through Rust so password handling, qpdf invocation, and the resulting encrypted bytes stay out of the browser-side layer.
+Encrypted-PDF unlock and protected-copy export also route through Rust so password handling, qpdf invocation, and the resulting decrypted or encrypted bytes stay out of the browser-side layer.
 
 ### 4. Document Engine Layer
 
@@ -135,8 +136,18 @@ Planned split:
 1. UI selects a file path through Tauri dialog.
 2. Rust reads the file and classifies PDF capabilities and risks.
 3. Rust returns document bytes plus metadata.
-4. Frontend loads bytes into `PDF.js`.
-5. Viewer renders the active page to canvas.
+4. If the PDF is encrypted, frontend stages it as a locked session instead of handing encrypted bytes to the editor workspace.
+5. If the PDF is not encrypted, frontend loads bytes into `PDF.js`.
+6. Viewer renders the active page to canvas.
+
+### Unlock Encrypted Document
+
+1. UI collects the open password, if one is required.
+2. Frontend sends the locked PDF bytes to Rust through `decrypt_pdf_bytes`.
+3. Rust resolves the local `qpdf` runtime and stages temporary input/output files.
+4. `qpdf` decrypts the PDF into normal editable bytes on-device.
+5. Rust reclassifies the unlocked bytes and returns them to the UI.
+6. Frontend replaces the locked session with a normal `WorkspaceDocument`.
 
 ### Mutate Document
 
@@ -173,7 +184,7 @@ Planned split:
 
 ## State Model
 
-The frontend keeps one active `WorkspaceDocument`.
+The frontend keeps one active `WorkspaceDocument` plus an optional pending encrypted session while a locked PDF waits for local unlock.
 
 Core fields:
 
@@ -219,7 +230,7 @@ These are the modules the codebase should grow into instead of adding more logic
 - `src/App.test.ts`
   regression suite for critical desktop UI actions and trust/OCR flows
 - `src/App.workflow.test.ts`
-  real-PDF workflow regression for open, mutate, metadata, save, merge, and export paths
+  real-PDF workflow regression for open, encrypted unlock, mutate, metadata, save, merge, and export paths
 - `src/test/pdf-fixtures.ts`
   generated real-PDF fixtures and document summary helpers used by regression tests
 - `src/lib/operations/pdf-document.test.ts`
@@ -238,7 +249,7 @@ These are the modules the codebase should grow into instead of adding more logic
 - `src-tauri/src/ocr.rs`
   local Tesseract detection, language enumeration, and image OCR text/PDF execution
 - `src-tauri/src/qpdf.rs`
-  local qpdf detection, protected-copy option validation, and encrypted PDF generation
+  local qpdf detection, encrypted-PDF unlock/decrypt, protected-copy option validation, and encrypted PDF generation
 - `src-tauri/src/signature_validation.rs`
   local OpenSSL detection, detached CMS verification, signer certificate extraction, and certificate-chain trust checks
 - `src-tauri/src/pdf/`
@@ -311,6 +322,7 @@ Status on March 18, 2026:
 - embedded attachment insertion implemented through the frontend PDF mutation layer
 - native encryption summary inspection implemented
 - write-side protected-copy export implemented through local qpdf
+- encrypted-PDF unlock into editable workspace implemented through local qpdf
 - detached CMS signature integrity verification implemented through local OpenSSL
 - signer certificate inventory implemented through local OpenSSL
 - local CA-store certificate-chain trust attempts implemented

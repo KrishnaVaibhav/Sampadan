@@ -20,6 +20,7 @@ This package contains the local-first desktop application for Sampadan.
 - embed local attachment files into PDFs and export embedded attachments
 - export page PNGs and document text
 - edit PDF metadata
+- unlock encrypted PDFs into a normal editable workspace through local `qpdf`
 - save password-protected PDF copies through local `qpdf`
 - run local OCR through Tesseract when available on the device
 - create searchable OCR PDF copies from scanned pages
@@ -48,9 +49,9 @@ npm run tauri:build
 
 The desktop app probes the local machine for a Tesseract binary at runtime. On Windows it checks standard install locations such as `C:\Program Files\Tesseract-OCR\tesseract.exe` if `tesseract` is not already on `PATH`.
 
-## Protected Copies
+## Protected PDFs
 
-The desktop app probes the local machine for a `qpdf` binary when you save a protected copy. If `qpdf` is not already on `PATH`, you can point Sampadan at a local install with `SAMPADAN_QPDF_PATH`.
+The desktop app probes the local machine for a `qpdf` binary when you unlock an encrypted PDF or save a protected copy. If `qpdf` is not already on `PATH`, you can point Sampadan at a local install with `SAMPADAN_QPDF_PATH`.
 
 ## Signature Validation
 

@@ -140,17 +140,17 @@ const sampleTrustReport: PdfTrustReport = {
     },
   ],
   encryption: {
-    encrypted: true,
-    handler: 'Standard',
-    algorithm: 'AES-256 standard security',
-    version: 5,
-    revision: 6,
-    keyLengthBits: 256,
-    permissions: -4,
-    streamFilter: 'StdCF',
-    stringFilter: 'StdCF',
-    encryptMetadata: false,
-    notes: ['Metadata is excluded from encryption.'],
+    encrypted: false,
+    handler: null,
+    algorithm: null,
+    version: null,
+    revision: null,
+    keyLengthBits: null,
+    permissions: null,
+    streamFilter: null,
+    stringFilter: null,
+    encryptMetadata: null,
+    notes: [],
   },
   recommendations: [
     'Saving edits will create a new PDF revision and may invalidate existing signatures.',
@@ -158,26 +158,33 @@ const sampleTrustReport: PdfTrustReport = {
   ],
 }
 
-function createPayload(fileName = 'sample.pdf', path: string | null = 'C:/docs/sample.pdf'): LoadedPdfPayload {
+function createPayload(
+  fileName = 'sample.pdf',
+  path: string | null = 'C:/docs/sample.pdf',
+  overrides: Partial<LoadedPdfPayload> = {},
+): LoadedPdfPayload {
+  const flags = {
+    encrypted: false,
+    signed: true,
+    hasForms: true,
+    hasXfa: false,
+    hasJavascript: false,
+    hasAttachments: true,
+    tagged: false,
+    linearized: false,
+    likelyScanned: false,
+    mixedContent: true,
+    ...overrides.flags,
+  }
+
   return {
-    path,
-    fileName,
-    size: 4096,
-    version: '1.7',
-    bytesBase64: encodeBase64('%PDF-sample'),
-    flags: {
-      encrypted: true,
-      signed: true,
-      hasForms: true,
-      hasXfa: false,
-      hasJavascript: false,
-      hasAttachments: true,
-      tagged: false,
-      linearized: false,
-      likelyScanned: false,
-      mixedContent: true,
-    },
-    trustReport: sampleTrustReport,
+    path: overrides.path ?? path,
+    fileName: overrides.fileName ?? fileName,
+    size: overrides.size ?? 4096,
+    version: overrides.version ?? '1.7',
+    bytesBase64: overrides.bytesBase64 ?? encodeBase64('%PDF-sample'),
+    flags,
+    trustReport: overrides.trustReport ?? sampleTrustReport,
   }
 }
 
@@ -226,6 +233,8 @@ beforeEach(() => {
         return createPayload()
       case 'protect_pdf_bytes':
         return createPayload((args?.fileName as string | undefined) ?? 'sample-protected.pdf', null)
+      case 'decrypt_pdf_bytes':
+        return createPayload((args?.fileName as string | undefined) ?? 'sample.pdf', null)
       case 'load_file_bytes': {
         const path = String(args?.path ?? '')
         if (path.toLowerCase().endsWith('.png')) {
@@ -325,7 +334,6 @@ describe('Sampadan desktop app regression suite', () => {
       expect((screen.getByRole('button', { name: label }) as HTMLButtonElement).disabled).toBe(false)
     }
 
-    expect(screen.getByText('AES-256 standard security')).toBeTruthy()
     expect(screen.getByText('1 embedded file')).toBeTruthy()
     expect(screen.getByText('1 signature detected')).toBeTruthy()
     expect(screen.getByText('OpenSSL detected')).toBeTruthy()
@@ -333,6 +341,96 @@ describe('Sampadan desktop app regression suite', () => {
     expect(screen.getByText('Certificate trust: Self-signed or local root missing')).toBeTruthy()
     expect(screen.getByText('Certificate chain: 1 certificate')).toBeTruthy()
     expect(screen.getByText('SHA-256: AA:BB:CC:DD')).toBeTruthy()
+  })
+
+  test('stages encrypted PDFs for local unlock before enabling the editor workspace', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/locked.pdf')
+
+    invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      switch (command) {
+        case 'get_ocr_status':
+          return {
+            available: true,
+            binaryPath: 'C:/Program Files/Tesseract-OCR/tesseract.exe',
+            version: 'tesseract v5.5.0',
+            languages: ['eng', 'osd'],
+            recommendedLanguage: 'eng',
+            missingReason: null,
+          }
+        case 'get_qpdf_status':
+          return {
+            available: true,
+            binaryPath: 'C:/Program Files/qpdf 12.3.2/bin/qpdf.exe',
+            version: 'qpdf version 12.3.2',
+            missingReason: null,
+          }
+        case 'load_pdf':
+          return createPayload('locked.pdf', 'C:/docs/locked.pdf', {
+            flags: {
+              encrypted: true,
+              signed: false,
+              hasForms: false,
+              hasXfa: false,
+              hasJavascript: false,
+              hasAttachments: false,
+              tagged: false,
+              linearized: false,
+              likelyScanned: false,
+              mixedContent: false,
+            },
+            trustReport: {
+              ...sampleTrustReport,
+              signatureCount: 0,
+              signatures: [],
+              attachmentCount: 0,
+              attachments: [],
+              signatureValidationRuntime: null,
+              encryption: {
+                encrypted: true,
+                handler: 'Standard',
+                algorithm: 'AES-256 standard security',
+                version: 5,
+                revision: 6,
+                keyLengthBits: 256,
+                permissions: -4,
+                streamFilter: 'StdCF',
+                stringFilter: 'StdCF',
+                encryptMetadata: false,
+                notes: ['Metadata is excluded from encryption.'],
+              },
+              recommendations: ['Unlock this PDF locally before editing or OCR.'],
+            },
+          })
+        case 'decrypt_pdf_bytes':
+          return createPayload('locked.pdf', null)
+        default:
+          throw new Error(`Unexpected invoke command: ${command}`)
+      }
+    })
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('unlock-pdf-button')).toBeTruthy()
+      expect(screen.getByText('Locked PDF')).toBeTruthy()
+    })
+
+    expect((screen.getByTestId('save-pdf-button') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText('Unlock this PDF locally before editing or OCR.')).toBeTruthy()
+    expect(screen.getByText('AES-256 standard security')).toBeTruthy()
+
+    await user.type(screen.getByLabelText('Open Password'), 'viewer-secret')
+    await user.click(screen.getByTestId('unlock-pdf-button'))
+
+    await waitFor(() => {
+      expect((screen.getByTestId('save-pdf-button') as HTMLButtonElement).disabled).toBe(false)
+      expect(screen.getAllByText('locked.pdf').length).toBeGreaterThan(0)
+    })
+
+    expectCamelCasePayloadKeys(getInvokePayloads('decrypt_pdf_bytes'), ['fileName', 'bytesBase64', 'password'])
   })
 
   test('exports the trust report through the local save pipeline', async () => {

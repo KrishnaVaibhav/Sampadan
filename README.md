@@ -28,6 +28,7 @@ Current local features include:
 - inspect PDF signatures, attachments, and encryption signals
 - embed local files into PDFs as attachments
 - export embedded PDF attachments locally when attachment streams are present
+- unlock encrypted PDFs locally into an editable workspace through `qpdf`
 - save password-protected PDF copies locally through `qpdf`
 - cryptographically verify detached CMS PDF signatures locally when OpenSSL is available
 - inspect embedded signer certificates and attempt local certificate-chain trust checks through OpenSSL
@@ -51,7 +52,7 @@ npm run tauri:dev
 
 Local OCR currently uses a machine-local Tesseract runtime. On Windows, the desktop app will detect standard installs such as `C:\Program Files\Tesseract-OCR\tesseract.exe`.
 
-Protected-copy export currently uses a machine-local qpdf runtime. If `qpdf` is not on `PATH`, Sampadan also supports `SAMPADAN_QPDF_PATH`.
+Encrypted-PDF unlock and protected-copy export currently use a machine-local qpdf runtime. If `qpdf` is not on `PATH`, Sampadan also supports `SAMPADAN_QPDF_PATH`.
 
 Local signature verification currently uses a machine-local OpenSSL runtime. If `openssl` is not on `PATH`, Sampadan also supports `SAMPADAN_OPENSSL_PATH`. Detached signature integrity and certificate-chain trust are checked locally; revocation is not checked yet.
 

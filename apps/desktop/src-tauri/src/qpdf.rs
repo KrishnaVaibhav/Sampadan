@@ -127,6 +127,50 @@ pub fn protect_pdf_bytes(bytes: &[u8], options: &PdfProtectionOptions) -> Result
   Ok(protected_bytes)
 }
 
+pub fn decrypt_pdf_bytes(bytes: &[u8], password: Option<&str>) -> Result<Vec<u8>, String> {
+  let qpdf = resolve_qpdf()?;
+  let stamp = build_temp_stamp();
+  let input_path = env::temp_dir().join(format!("sampadan-qpdf-decrypt-input-{stamp}.pdf"));
+  let output_path = env::temp_dir().join(format!("sampadan-qpdf-decrypt-output-{stamp}.pdf"));
+
+  fs::write(&input_path, bytes).map_err(|error| {
+    format!(
+      "Failed to stage PDF unlock input {}: {error}",
+      input_path.display()
+    )
+  })?;
+
+  let resolved_password = password.unwrap_or_default();
+  let output = Command::new(&qpdf.command)
+    .arg(format!("--password={resolved_password}"))
+    .arg("--decrypt")
+    .arg("--")
+    .arg(&input_path)
+    .arg(&output_path)
+    .output()
+    .map_err(|error| {
+      remove_if_exists(&input_path);
+      format!("Failed to launch qpdf: {error}")
+    })?;
+
+  remove_if_exists(&input_path);
+
+  if !output.status.success() {
+    remove_if_exists(&output_path);
+    return Err(format!("PDF unlock failed: {}", describe_failure(&output)));
+  }
+
+  let decrypted_bytes = fs::read(&output_path).map_err(|error| {
+    format!(
+      "qpdf generated an unlocked PDF, but Sampadan could not read {}: {error}",
+      output_path.display()
+    )
+  })?;
+
+  remove_if_exists(&output_path);
+  Ok(decrypted_bytes)
+}
+
 fn resolve_qpdf() -> Result<ResolvedQpdf, String> {
   if let Ok(configured_path) = env::var("SAMPADAN_QPDF_PATH") {
     let candidate = PathBuf::from(configured_path);
@@ -314,7 +358,10 @@ fn describe_failure(output: &Output) -> String {
 
 #[cfg(test)]
 mod tests {
-  use super::{protect_pdf_bytes, probe_qpdf, resolve_qpdf, PdfProtectionOptions, ResolvedQpdf};
+  use super::{
+    decrypt_pdf_bytes, protect_pdf_bytes, probe_qpdf, resolve_qpdf, PdfProtectionOptions,
+    ResolvedQpdf,
+  };
   use crate::pdf_inspect;
   use std::{
     env, fs,
@@ -383,6 +430,37 @@ mod tests {
     let report = pdf_inspect::build_trust_report(&protected, &flags);
     assert!(report.encryption.encrypted);
     assert_eq!(report.encryption.key_length_bits, Some(256));
+  }
+
+  #[test]
+  fn decrypt_pdf_bytes_smoke_test_with_local_qpdf() {
+    let qpdf = match resolve_qpdf() {
+      Ok(runtime) => runtime,
+      Err(_) => return,
+    };
+
+    let source = create_empty_pdf_bytes(&qpdf).expect("qpdf should create an empty source PDF");
+    let protected = protect_pdf_bytes(
+      &source,
+      &PdfProtectionOptions {
+        user_password: Some("viewer-secret".to_string()),
+        owner_password: "owner-secret-2026".to_string(),
+        print: "low".to_string(),
+        modify: "annotate".to_string(),
+        allow_extract: false,
+        encrypt_metadata: false,
+      },
+    )
+    .expect("qpdf should produce a protected PDF");
+
+    let decrypted =
+      decrypt_pdf_bytes(&protected, Some("viewer-secret")).expect("qpdf should unlock the PDF");
+
+    let flags = pdf_inspect::classify_pdf(&decrypted);
+    assert!(!flags.encrypted);
+
+    let report = pdf_inspect::build_trust_report(&decrypted, &flags);
+    assert!(!report.encryption.encrypted);
   }
 
   fn create_empty_pdf_bytes(qpdf: &ResolvedQpdf) -> Result<Vec<u8>, String> {

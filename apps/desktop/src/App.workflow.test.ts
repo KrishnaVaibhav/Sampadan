@@ -112,16 +112,21 @@ const emptyTrustReport: PdfTrustReport = {
   recommendations: [],
 }
 
-async function buildPayload(bytes: Uint8Array, fileName = 'workflow.pdf', path: string | null = 'C:/docs/workflow.pdf'): Promise<LoadedPdfPayload> {
+async function buildPayload(
+  bytes: Uint8Array,
+  fileName = 'workflow.pdf',
+  path: string | null = 'C:/docs/workflow.pdf',
+  overrides: Partial<LoadedPdfPayload> = {},
+): Promise<LoadedPdfPayload> {
   const { PDFDocument } = await import('pdf-lib')
   const document = await PDFDocument.load(bytes.slice(), { updateMetadata: false })
 
   return {
-    path,
-    fileName,
-    size: bytes.length,
-    version: '1.7',
-    bytesBase64: encodeBase64(bytes),
+    path: overrides.path ?? path,
+    fileName: overrides.fileName ?? fileName,
+    size: overrides.size ?? bytes.length,
+    version: overrides.version ?? '1.7',
+    bytesBase64: overrides.bytesBase64 ?? encodeBase64(bytes),
     flags: {
       encrypted: false,
       signed: false,
@@ -133,8 +138,9 @@ async function buildPayload(bytes: Uint8Array, fileName = 'workflow.pdf', path: 
       linearized: false,
       likelyScanned: false,
       mixedContent: false,
+      ...overrides.flags,
     },
-    trustReport: emptyTrustReport,
+    trustReport: overrides.trustReport ?? emptyTrustReport,
   }
 }
 
@@ -145,6 +151,93 @@ beforeEach(() => {
 })
 
 describe('real PDF workflow actions', () => {
+  test('encrypted PDFs stay locked until the local qpdf unlock flow succeeds', async () => {
+    const lockedPath = 'C:/docs/locked.pdf'
+    const lockedBytes = await createSamplePdf(2)
+    const encryptedTrustReport: PdfTrustReport = {
+      ...emptyTrustReport,
+      encryption: {
+        encrypted: true,
+        handler: 'Standard',
+        algorithm: 'AES-256 standard security',
+        version: 5,
+        revision: 6,
+        keyLengthBits: 256,
+        permissions: -4,
+        streamFilter: 'StdCF',
+        stringFilter: 'StdCF',
+        encryptMetadata: false,
+        notes: ['Metadata is excluded from encryption.'],
+      },
+      recommendations: ['Unlock this PDF locally before editing or OCR.'],
+    }
+
+    invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      switch (command) {
+        case 'get_ocr_status':
+          return {
+            available: false,
+            binaryPath: null,
+            version: null,
+            languages: [],
+            recommendedLanguage: 'eng',
+            missingReason: 'Tesseract not installed for this workflow test',
+          }
+        case 'get_qpdf_status':
+          return {
+            available: true,
+            binaryPath: 'C:/Program Files/qpdf 12.3.2/bin/qpdf.exe',
+            version: 'qpdf version 12.3.2',
+            missingReason: null,
+          }
+        case 'load_pdf':
+          return buildPayload(lockedBytes, 'locked.pdf', lockedPath, {
+            flags: {
+              encrypted: true,
+              signed: false,
+              hasForms: false,
+              hasXfa: false,
+              hasJavascript: false,
+              hasAttachments: false,
+              tagged: false,
+              linearized: false,
+              likelyScanned: false,
+              mixedContent: false,
+            },
+            trustReport: encryptedTrustReport,
+          })
+        case 'decrypt_pdf_bytes':
+          return buildPayload(lockedBytes, 'locked.pdf', null)
+        default:
+          throw new Error(`Unexpected invoke command: ${command}`)
+      }
+    })
+
+    openDialogMock.mockResolvedValue(lockedPath)
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Locked PDF')).toBeTruthy()
+      expect(screen.getByText('AES-256 standard security')).toBeTruthy()
+    })
+
+    expect((screen.getByTestId('save-pdf-button') as HTMLButtonElement).disabled).toBe(true)
+
+    await user.type(screen.getByLabelText('Open Password'), 'viewer-secret')
+    await user.click(screen.getByTestId('unlock-pdf-button'))
+
+    await waitFor(() => {
+      expect(screen.getByText('1/2 pages')).toBeTruthy()
+      expect((screen.getByTestId('save-pdf-button') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    expectCamelCasePayloadKeys(getInvokePayloads('decrypt_pdf_bytes'), ['fileName', 'bytesBase64', 'password'])
+  })
+
   test('opening a different PDF while another is open does not trigger detached buffer errors', async () => {
     const firstPath = 'C:/docs/first.pdf'
     const secondPath = 'C:/docs/second.pdf'

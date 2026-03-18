@@ -123,10 +123,19 @@
     { value: 'none', label: 'No edits' },
   ]
 
+  type PendingEncryptedPdf = {
+    payload: LoadedPdfPayload
+    current: number
+    modified: boolean
+    source: 'disk' | 'generated'
+    path: string | null
+  }
+
   let viewerCanvas: HTMLCanvasElement | null = null
   let viewerPane: HTMLDivElement | null = null
   let pdfProxy: PdfProxy | null = null
   let workspace: WorkspaceDocument | null = null
+  let pendingEncryptedPdf: PendingEncryptedPdf | null = null
   let currentPage = 1
   let zoom = 1.1
   let busy = false
@@ -167,6 +176,8 @@
 
   $: pageItems = workspace ? Array.from({ length: workspace.pageCount }, (_, index) => index + 1) : []
   $: currentZoomLabel = `${Math.round(zoom * 100)}%`
+  $: activeDocumentName = workspace?.fileName ?? pendingEncryptedPdf?.payload.fileName ?? 'No PDF loaded'
+  $: viewerStatusLabel = workspace ? `Page ${currentPage} of ${workspace.pageCount}` : pendingEncryptedPdf ? 'Locked until unlocked' : 'Idle'
   $: thumbnailMap = new Map(thumbnails.map((thumbnail) => [thumbnail.pageNumber, thumbnail]))
   $: ocrAvailableLanguages = ocrStatus?.languages ?? []
   $: ocrReady = ocrStatus?.available ?? false
@@ -250,6 +261,17 @@
     try {
       const payload = await invoke<LoadedPdfPayload>('load_pdf', { path })
       recentPaths = rememberRecentPath(recentPaths, path)
+
+      if (payload.flags.encrypted) {
+        await stageEncryptedPdf(payload, {
+          current: preferredPage,
+          modified: false,
+          source: 'disk',
+          path,
+        })
+        return
+      }
+
       await loadPayload(payload, {
         current: preferredPage,
         modified: false,
@@ -283,7 +305,7 @@
       const buffers: Uint8Array[] = workspace ? [workspace.bytes] : []
       for (const path of paths) {
         const payload = await invoke<LoadedPdfPayload>('load_pdf', { path })
-        buffers.push(base64ToBytes(payload.bytesBase64))
+        buffers.push(await resolveEditableBytes(payload, `merging ${payload.fileName}`))
       }
 
       const mergedBytes = await mergeDocuments(buffers)
@@ -321,7 +343,7 @@
       recentPaths = rememberRecentPath(recentPaths, path)
       const nextBytes = await insertDocumentAfterPage(
         currentWorkspace.bytes,
-        base64ToBytes(payload.bytesBase64),
+        await resolveEditableBytes(payload, `inserting ${payload.fileName}`),
         currentPage - 1,
       )
 
@@ -877,6 +899,43 @@
     }
   }
 
+  async function unlockPendingPdf() {
+    if (!pendingEncryptedPdf || busy) return
+
+    if (!qpdfReady) {
+      reportError(qpdfStatus?.missingReason ?? 'Install qpdf to unlock encrypted PDFs.', 'Unlock is unavailable')
+      return
+    }
+
+    const locked = pendingEncryptedPdf
+    busy = true
+    statusTone = 'busy'
+    status = `Unlocking ${locked.payload.fileName}`
+    lastError = null
+
+    try {
+      const unlockedPayload = await invoke<LoadedPdfPayload>('decrypt_pdf_bytes', {
+        fileName: locked.payload.fileName,
+        bytesBase64: locked.payload.bytesBase64,
+        password: protectionUserPassword,
+      })
+
+      await loadPayload(unlockedPayload, {
+        current: locked.current,
+        modified: locked.modified,
+        source: locked.source,
+        path: locked.path,
+      })
+
+      statusTone = 'idle'
+      status = `Unlocked ${locked.payload.fileName}`
+    } catch (error) {
+      reportError(error, `Failed to unlock ${locked.payload.fileName}`)
+    } finally {
+      busy = false
+    }
+  }
+
   async function refreshOcrStatus() {
     try {
       const nextStatus = await fetchOcrStatus()
@@ -1266,6 +1325,7 @@
     }
 
     pdfProxy = nextProxy
+    pendingEncryptedPdf = null
     workspace = {
       path: options.path ?? payload.path,
       fileName: payload.fileName,
@@ -1290,6 +1350,67 @@
     await tick()
     await renderCurrentPage()
     void refreshWorkspaceContext(nextProxy, bytes)
+  }
+
+  async function clearWorkspaceSession() {
+    if (pdfProxy) {
+      await pdfProxy.destroy()
+      pdfProxy = null
+    }
+
+    workspace = null
+    currentPage = 1
+    rangeExpression = '1'
+    thumbnails = []
+    metadataDraft = emptyMetadata()
+    metadataDirty = false
+    ocrPreview = ''
+    ocrPreviewLabel = 'No OCR text yet'
+    ocrLastDurationMs = null
+    dragSourcePage = null
+    dropTargetPage = null
+  }
+
+  async function stageEncryptedPdf(
+    payload: LoadedPdfPayload,
+    options: {
+      current?: number
+      modified?: boolean
+      source?: 'disk' | 'generated'
+      path?: string | null
+    } = {},
+  ) {
+    await clearWorkspaceSession()
+    pendingEncryptedPdf = {
+      payload,
+      current: Math.max(1, options.current ?? 1),
+      modified: options.modified ?? false,
+      source: options.source ?? (payload.path ? 'disk' : 'generated'),
+      path: options.path ?? payload.path,
+    }
+    statusTone = 'idle'
+    status = qpdfReady
+      ? `Encrypted PDF detected. Unlock ${payload.fileName} to continue.`
+      : `Encrypted PDF detected in ${payload.fileName}. Install qpdf to unlock it locally.`
+    lastError = null
+  }
+
+  async function resolveEditableBytes(payload: LoadedPdfPayload, contextLabel: string) {
+    if (!payload.flags.encrypted) {
+      return base64ToBytes(payload.bytesBase64)
+    }
+
+    if (!qpdfReady) {
+      throw new Error(`Install qpdf locally to unlock encrypted PDFs before ${contextLabel}.`)
+    }
+
+    const unlockedPayload = await invoke<LoadedPdfPayload>('decrypt_pdf_bytes', {
+      fileName: payload.fileName,
+      bytesBase64: payload.bytesBase64,
+      password: protectionUserPassword,
+    })
+
+    return base64ToBytes(unlockedPayload.bytesBase64)
   }
 
   async function refreshWorkspaceContext(proxy: PdfProxy, bytes: Uint8Array) {
@@ -1685,7 +1806,7 @@
     <header class="topbar card compact-card">
       <div class="topbar-copy">
         <span class="eyebrow">Viewer Focus</span>
-        <h2>{workspace ? workspace.fileName : 'No PDF loaded'}</h2>
+        <h2>{activeDocumentName}</h2>
       </div>
       <div class="topbar-pills">
         <span class={`pill tone-${statusTone}`}>{status}</span>
@@ -1696,6 +1817,8 @@
           <span class:modified-pill={workspace.modified} class="pill">
             {workspace.modified ? 'Unsaved changes' : 'Saved state'}
           </span>
+        {:else if pendingEncryptedPdf}
+          <span class="pill">Locked PDF</span>
         {/if}
       </div>
     </header>
@@ -1773,7 +1896,7 @@
       <section class="card viewer-shell hero-viewer" data-testid="viewer-shell">
         <div class="section-head">
           <h2>Viewer</h2>
-          <span>{workspace ? `Page ${currentPage} of ${workspace.pageCount}` : 'Idle'}</span>
+          <span>{viewerStatusLabel}</span>
         </div>
 
         {#if workspace}
@@ -1783,9 +1906,15 @@
         {:else}
           <div class="empty-state">
             <span class="eyebrow">Local first</span>
-            <h3>Open a PDF to start editing.</h3>
-            <p>Sampadan keeps the document on-device for viewing, editing, OCR, and export.</p>
-            <button on:click={openPdfFlow}>Open a PDF</button>
+            {#if pendingEncryptedPdf}
+              <h3>Unlock the PDF to continue.</h3>
+              <p>Sampadan detected PDF encryption and is waiting for a local qpdf unlock step.</p>
+              <button on:click={unlockPendingPdf} disabled={busy || !qpdfReady}>Unlock PDF</button>
+            {:else}
+              <h3>Open a PDF to start editing.</h3>
+              <p>Sampadan keeps the document on-device for viewing, editing, OCR, and export.</p>
+              <button on:click={openPdfFlow}>Open a PDF</button>
+            {/if}
           </div>
         {/if}
       </section>
@@ -2119,7 +2248,7 @@
       </div>
     </details>
 
-    <details class="card utility-panel protection-panel" open={Boolean(workspace)}>
+    <details class="card utility-panel protection-panel" open={Boolean(workspace || pendingEncryptedPdf)}>
       <summary class="dock-summary">
         <span>Protection</span>
         <small>{qpdfReady ? 'Ready' : 'Unavailable'}</small>
@@ -2142,6 +2271,24 @@
         <p class="muted panel-note">
           Save a protected copy without replacing the current viewer session.
         </p>
+
+        {#if pendingEncryptedPdf}
+          <div class="inspector-block">
+            <span class="meta-label">Unlock Pending</span>
+            <strong>{pendingEncryptedPdf.payload.fileName}</strong>
+            <div class="stack-list">
+              {#if pendingEncryptedPdf.payload.trustReport.encryption.encrypted}
+                <span>{pendingEncryptedPdf.payload.trustReport.encryption.algorithm ?? 'Encrypted PDF'}</span>
+              {/if}
+              <span class="muted">
+                Enter the open password if needed, then unlock this PDF locally before editing, OCR, or export.
+              </span>
+              {#each pendingEncryptedPdf.payload.trustReport.recommendations as recommendation}
+                <span class="muted">{recommendation}</span>
+              {/each}
+            </div>
+          </div>
+        {/if}
 
         <div class="field-grid">
           <label class="field">
@@ -2197,6 +2344,9 @@
 
         <div class="tool-grid">
           <button on:click={refreshQpdfStatus} disabled={busy}>Refresh Protection</button>
+          <button data-testid="unlock-pdf-button" on:click={unlockPendingPdf} disabled={busy || !pendingEncryptedPdf || !qpdfReady}>
+            Unlock PDF
+          </button>
           <button
             data-testid="save-protected-copy-button"
             on:click={saveProtectedCopy}

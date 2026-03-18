@@ -90,6 +90,20 @@ pub fn protect_pdf_bytes(
 }
 
 #[tauri::command]
+pub fn decrypt_pdf_bytes(
+  file_name: Option<String>,
+  bytes_base64: String,
+  password: Option<String>,
+) -> Result<LoadedPdf, String> {
+  let bytes = STANDARD
+    .decode(bytes_base64)
+    .map_err(|error| format!("Failed to decode document bytes: {error}"))?;
+  let decrypted_bytes = qpdf::decrypt_pdf_bytes(&bytes, password.as_deref())?;
+
+  Ok(build_loaded_pdf(None, file_name, decrypted_bytes))
+}
+
+#[tauri::command]
 pub fn load_file_bytes(path: String) -> Result<LoadedFileBytes, String> {
   let path_buf = PathBuf::from(&path);
   let bytes = fs::read(&path_buf)

@@ -14,6 +14,7 @@ pub fn run() {
       commands::inspect_pdf_bytes,
       commands::get_qpdf_status,
       commands::protect_pdf_bytes,
+      commands::decrypt_pdf_bytes,
       commands::save_file_bytes,
       commands::extract_pdf_attachments,
       commands::get_ocr_status,
