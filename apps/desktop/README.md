@@ -16,7 +16,7 @@ This package contains the local-first desktop application for Sampadan.
 - viewer-first workspace with the PDF canvas as the dominant surface
 - rotate, reorder, duplicate, delete, and insert blank pages
 - extract page ranges and split documents into single-page files
-- add text watermarks, image stamps, review notes, free text blocks, text-targeted replacement edits, width-safe born-digital text rewrites for simple standard-font PDFs including split `Tj`/`TJ` runs and line-show text operators, whiteout-and-replace edits, and page numbers
+- add text watermarks, image stamps, sticky-note annotations, highlight/underline/strikeout annotations, review notes, free text blocks, text-targeted replacement edits, width-safe born-digital text rewrites for simple standard-font PDFs including split `Tj`/`TJ` runs and line-show text operators, whiteout-and-replace edits, and page numbers
 - read, fill, and flatten standard AcroForm text, checkbox, radio, dropdown, and option-list fields locally
 - embed local attachment files into PDFs and export embedded attachments
 - export page PNGs, document text, Markdown, HTML, and DOCX

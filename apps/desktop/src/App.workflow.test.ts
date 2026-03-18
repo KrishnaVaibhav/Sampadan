@@ -3,7 +3,13 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 import type { LoadedPdfPayload, PdfTrustReport } from './lib/types'
-import { createSampleAcroFormPdf, createSamplePdf, readPdfFormValues, readPdfSummary } from './test/pdf-fixtures'
+import {
+  createSampleAcroFormPdf,
+  createSamplePdf,
+  readPdfFormValues,
+  readPdfPageAnnotations,
+  readPdfSummary,
+} from './test/pdf-fixtures'
 
 const { openDialogMock, saveDialogMock, invokeMock } = vi.hoisted(() => ({
   openDialogMock: vi.fn(),
@@ -35,18 +41,19 @@ vi.mock('./lib/pdf-engine', async () => {
       return {
         numPages: pageCount,
         getPage: async (pageNumber: number) => ({
-          getViewport: ({ scale }: { scale: number }) => ({
-            width: 595 * scale,
-            height: 842 * scale,
-            scale,
-            transform: [scale, 0, 0, -scale, 0, 842 * scale],
-          }),
-          render: () => ({ promise: Promise.resolve() }),
-          cleanup: () => undefined,
-          getTextContent: async () => ({
-            items: [
-              {
-                str: `Sample page ${pageNumber}`,
+        getViewport: ({ scale }: { scale: number }) => ({
+          width: 595 * scale,
+          height: 842 * scale,
+          scale,
+          transform: [scale, 0, 0, -scale, 0, 842 * scale],
+        }),
+        render: () => ({ promise: Promise.resolve() }),
+        cleanup: () => undefined,
+        getAnnotations: async () => [],
+        getTextContent: async () => ({
+          items: [
+            {
+              str: `Sample page ${pageNumber}`,
                 hasEOL: false,
                 width: 92,
                 height: 16,
@@ -648,6 +655,26 @@ describe('real PDF workflow actions', () => {
     await user.click(screen.getByTestId('replace-selected-text-button'))
     await waitFor(() => {
       expect(screen.getByText(/Replaced selected text on page 2/)).toBeTruthy()
+    })
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Target text: Body content for page 2')).toBeTruthy()
+    })
+    await user.click(screen.getByLabelText('Target text: Body content for page 2'))
+    await user.clear(screen.getByLabelText('Note Text'))
+    await user.type(screen.getByLabelText('Note Text'), 'Highlight this selected line for review.')
+    await user.click(screen.getByTestId('highlight-selected-text-button'))
+    await waitFor(async () => {
+      const annotationsAfterHighlight = await readPdfPageAnnotations(currentBytes, 2)
+      expect(annotationsAfterHighlight.map((annotation) => annotation.subtype)).toContain('Highlight')
+    })
+
+    await user.click(screen.getByTestId('sticky-note-button'))
+    await waitFor(async () => {
+      const annotationsAfterSticky = await readPdfPageAnnotations(currentBytes, 2)
+      expect(annotationsAfterSticky.map((annotation) => annotation.subtype)).toEqual(
+        expect.arrayContaining(['Highlight', 'Text']),
+      )
     })
 
     await user.clear(screen.getByLabelText('Edit Text'))

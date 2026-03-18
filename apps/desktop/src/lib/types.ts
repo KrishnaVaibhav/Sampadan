@@ -184,6 +184,30 @@ export interface PdfPageTextSpan {
   fontSize: number
 }
 
+export type PdfPageAnnotationKind = 'text' | 'highlight' | 'underline' | 'strikeout'
+
+export interface PdfPageAnnotationQuad {
+  xPercent: number
+  yPercent: number
+  widthPercent: number
+  heightPercent: number
+}
+
+export interface PdfPageAnnotationOverlay {
+  id: string
+  pageNumber: number
+  kind: PdfPageAnnotationKind
+  xPercent: number
+  yPercent: number
+  widthPercent: number
+  heightPercent: number
+  quads: PdfPageAnnotationQuad[]
+  contents: string
+  title: string | null
+  colorCss: string
+  opacity: number
+}
+
 export interface OcrStatusPayload {
   available: boolean
   binaryPath: string | null

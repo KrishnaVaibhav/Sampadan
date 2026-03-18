@@ -1,4 +1,4 @@
-import type { PageThumbnail, PdfPageTextSpan } from '../types'
+import type { PageThumbnail, PdfPageAnnotationOverlay, PdfPageTextSpan } from '../types'
 
 import { getPdfJs, type PdfProxy } from '../pdf-engine'
 
@@ -230,6 +230,207 @@ export async function extractPageTextSpans(
   return mergedSpans.filter((span) => span.widthPercent > 0.4 && span.heightPercent > 0.4)
 }
 
+export async function extractPageAnnotations(
+  pdfProxy: PdfProxy,
+  pageNumber: number,
+  scale: number,
+): Promise<PdfPageAnnotationOverlay[]> {
+  const [{ Util }, page] = await Promise.all([getPdfJs(), pdfProxy.getPage(pageNumber)])
+  const viewport = page.getViewport({ scale })
+  const annotations = await page.getAnnotations()
+
+  const overlays = (annotations as Array<Record<string, unknown>>)
+    .map((annotation, index) => {
+      const kind = resolveAnnotationKind(annotation.subtype)
+      if (!kind) {
+        return null
+      }
+
+      const rectValues = toNumberList(annotation.rect)
+      if (rectValues.length < 4) {
+        return null
+      }
+
+      const rect = toPercentRect(convertPdfRectToViewportRect(viewport, Util, rectValues), viewport.width, viewport.height)
+      const quads =
+        kind === 'text'
+          ? []
+          : extractAnnotationQuads(annotation.quadPoints, viewport, Util).map((quad) =>
+              toPercentRect(quad, viewport.width, viewport.height),
+            )
+
+      return {
+        id: String(annotation.id ?? `${pageNumber}-${index}-${kind}`),
+        pageNumber,
+        kind,
+        xPercent: rect.xPercent,
+        yPercent: rect.yPercent,
+        widthPercent: rect.widthPercent,
+        heightPercent: rect.heightPercent,
+        quads,
+        contents: readAnnotationText(annotation.contentsObj),
+        title: readAnnotationText(annotation.titleObj) || null,
+        colorCss: resolveAnnotationColor(annotation.color, kind),
+        opacity:
+          typeof annotation.opacity === 'number' && Number.isFinite(annotation.opacity)
+            ? clampNumber(annotation.opacity, 0.12, 1)
+            : kind === 'highlight'
+              ? 0.28
+              : 1,
+      } satisfies PdfPageAnnotationOverlay
+    })
+    .filter((overlay): overlay is PdfPageAnnotationOverlay => Boolean(overlay))
+
+  page.cleanup()
+  return overlays
+}
+
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
+}
+
+function resolveAnnotationKind(subtype: unknown) {
+  if (typeof subtype !== 'string') {
+    return null
+  }
+
+  switch (subtype) {
+    case 'Text':
+      return 'text'
+    case 'Highlight':
+      return 'highlight'
+    case 'Underline':
+      return 'underline'
+    case 'StrikeOut':
+      return 'strikeout'
+    default:
+      return null
+  }
+}
+
+function toNumberList(value: unknown) {
+  if (!value || typeof value !== 'object' || !('length' in value)) {
+    return []
+  }
+
+  return Array.from(value as ArrayLike<number>, (entry) => Number(entry)).filter((entry) => Number.isFinite(entry))
+}
+
+function readAnnotationText(value: unknown) {
+  if (!value || typeof value !== 'object') {
+    return ''
+  }
+
+  const text = (value as { str?: unknown }).str
+  return typeof text === 'string' ? text : ''
+}
+
+function normalizeViewportRect(rect: number[]) {
+  const xValues = [rect[0], rect[2]].filter((value) => Number.isFinite(value))
+  const yValues = [rect[1], rect[3]].filter((value) => Number.isFinite(value))
+
+  return {
+    left: Math.min(...xValues),
+    top: Math.min(...yValues),
+    right: Math.max(...xValues),
+    bottom: Math.max(...yValues),
+  }
+}
+
+function toPercentRect(rect: number[], viewportWidth: number, viewportHeight: number) {
+  const normalized = normalizeViewportRect(rect)
+
+  return {
+    xPercent: clampNumber((normalized.left / viewportWidth) * 100, 0, 100),
+    yPercent: clampNumber((normalized.top / viewportHeight) * 100, 0, 100),
+    widthPercent: clampNumber(((normalized.right - normalized.left) / viewportWidth) * 100, 0, 100),
+    heightPercent: clampNumber(((normalized.bottom - normalized.top) / viewportHeight) * 100, 0, 100),
+  }
+}
+
+function convertPdfPointToViewport(
+  viewport: { convertToViewportPoint?: (x: number, y: number) => number[]; transform?: number[] },
+  util: { applyTransform: (point: number[], matrix: number[]) => unknown },
+  x: number,
+  y: number,
+) {
+  if (typeof viewport.convertToViewportPoint === 'function') {
+    return viewport.convertToViewportPoint(x, y)
+  }
+
+  if (Array.isArray(viewport.transform)) {
+    return util.applyTransform([x, y], viewport.transform) as number[]
+  }
+
+  return [x, y]
+}
+
+function convertPdfRectToViewportRect(
+  viewport: {
+    convertToViewportRectangle?: (rect: number[]) => number[]
+    convertToViewportPoint?: (x: number, y: number) => number[]
+    transform?: number[]
+  },
+  util: { applyTransform: (point: number[], matrix: number[]) => unknown },
+  rect: number[],
+) {
+  if (typeof viewport.convertToViewportRectangle === 'function') {
+    return viewport.convertToViewportRectangle(rect)
+  }
+
+  const first = convertPdfPointToViewport(viewport, util, rect[0], rect[1])
+  const second = convertPdfPointToViewport(viewport, util, rect[2], rect[3])
+  return [first[0], first[1], second[0], second[1]]
+}
+
+function extractAnnotationQuads(
+  quadPoints: unknown,
+  viewport: {
+    convertToViewportPoint?: (x: number, y: number) => number[]
+    transform?: number[]
+  },
+  util: { applyTransform: (point: number[], matrix: number[]) => unknown },
+) {
+  const points = toNumberList(quadPoints)
+  const quads: number[][] = []
+
+  for (let index = 0; index + 7 < points.length; index += 8) {
+    const corners = [
+      convertPdfPointToViewport(viewport, util, points[index], points[index + 1]),
+      convertPdfPointToViewport(viewport, util, points[index + 2], points[index + 3]),
+      convertPdfPointToViewport(viewport, util, points[index + 4], points[index + 5]),
+      convertPdfPointToViewport(viewport, util, points[index + 6], points[index + 7]),
+    ]
+    const xValues = corners.map((corner) => corner[0])
+    const yValues = corners.map((corner) => corner[1])
+
+    quads.push([
+      Math.min(...xValues),
+      Math.min(...yValues),
+      Math.max(...xValues),
+      Math.max(...yValues),
+    ])
+  }
+
+  return quads
+}
+
+function resolveAnnotationColor(color: unknown, kind: PdfPageAnnotationOverlay['kind']) {
+  const rgb = toNumberList(color)
+
+  if (rgb.length >= 3) {
+    return `rgb(${clampNumber(rgb[0], 0, 255)}, ${clampNumber(rgb[1], 0, 255)}, ${clampNumber(rgb[2], 0, 255)})`
+  }
+
+  switch (kind) {
+    case 'underline':
+      return 'rgb(48, 132, 240)'
+    case 'strikeout':
+      return 'rgb(220, 88, 96)'
+    case 'text':
+      return 'rgb(245, 188, 71)'
+    case 'highlight':
+    default:
+      return 'rgb(247, 224, 46)'
+  }
 }

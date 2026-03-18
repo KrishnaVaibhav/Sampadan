@@ -1,5 +1,11 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
 
+export interface PdfAnnotationFixtureSummary {
+  subtype: string
+  contents: string
+  title: string | null
+}
+
 export async function createSamplePdf(pageCount = 3) {
   const document = await PDFDocument.create()
   const font = await document.embedFont(StandardFonts.Helvetica)
@@ -235,5 +241,26 @@ export async function readPdfSummary(bytes: Uint8Array) {
     keywords: document.getKeywords() ?? [],
     creator: document.getCreator() ?? '',
     producer: document.getProducer() ?? '',
+  }
+}
+
+export async function readPdfPageAnnotations(bytes: Uint8Array, pageNumber: number) {
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
+  const document = await getDocument({ data: bytes.slice() }).promise
+
+  try {
+    const page = await document.getPage(pageNumber)
+    const annotations = await page.getAnnotations()
+
+    return (annotations as Array<{ subtype?: string; contentsObj?: { str?: string }; titleObj?: { str?: string } }>).map(
+      (annotation) =>
+        ({
+          subtype: annotation.subtype ?? 'Unknown',
+          contents: annotation.contentsObj?.str ?? '',
+          title: annotation.titleObj?.str ?? null,
+        }) satisfies PdfAnnotationFixtureSummary,
+    )
+  } finally {
+    await document.destroy()
   }
 }

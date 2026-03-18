@@ -61,6 +61,29 @@ vi.mock('./lib/viewer/pdf-viewer', () => ({
       fontSize: 16,
     },
   ]),
+  extractPageAnnotations: vi.fn(async (_pdfProxy, pageNumber: number) => [
+    {
+      id: `annotation-${pageNumber}`,
+      pageNumber,
+      kind: 'highlight',
+      xPercent: 12,
+      yPercent: 14,
+      widthPercent: 24,
+      heightPercent: 4,
+      quads: [
+        {
+          xPercent: 12,
+          yPercent: 14,
+          widthPercent: 24,
+          heightPercent: 4,
+        },
+      ],
+      contents: 'Existing annotation',
+      title: 'Sampadan',
+      colorCss: 'rgb(247, 224, 46)',
+      opacity: 0.28,
+    },
+  ]),
   extractDocumentTextPages: vi.fn(async () => ['Page 1 text', 'Page 2 text', 'Page 3 text']),
   extractDocumentText: vi.fn(async () => 'Document text'),
 }))
@@ -95,6 +118,11 @@ vi.mock('./lib/operations/pdf-document', () => ({
     producer: 'Sampadan',
   })),
   applyMetadataToDocument: vi.fn(async () => Uint8Array.from([1, 2, 3])),
+}))
+
+vi.mock('./lib/operations/pdf-annotations', () => ({
+  addStickyNoteAnnotationToDocument: vi.fn(async () => Uint8Array.from([9, 9, 1])),
+  addTextMarkupAnnotationToDocument: vi.fn(async () => Uint8Array.from([9, 9, 2])),
 }))
 
 vi.mock('./lib/operations/pdf-forms', () => ({
@@ -723,6 +751,38 @@ describe('Sampadan desktop app regression suite', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Replaced selected text on page 1')).toBeTruthy()
+    })
+  })
+
+  test('adds true PDF annotations from the selected text flow', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect((screen.getByTestId('toggle-text-target-button') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    await user.click(screen.getByTestId('toggle-text-target-button'))
+    await waitFor(() => {
+      expect(screen.getByLabelText('Target text: Page 1 line')).toBeTruthy()
+    })
+
+    await user.click(screen.getByLabelText('Target text: Page 1 line'))
+    await user.clear(screen.getByLabelText('Note Text'))
+    await user.type(screen.getByLabelText('Note Text'), 'Review this sentence.')
+    await user.click(screen.getByTestId('highlight-selected-text-button'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Added highlight annotation to page 1')).toBeTruthy()
+    })
+
+    await user.click(screen.getByTestId('sticky-note-button'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Added sticky note annotation to page 1')).toBeTruthy()
     })
   })
 

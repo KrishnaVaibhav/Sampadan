@@ -118,7 +118,7 @@ Encrypted-PDF unlock and protected-copy export also route through Rust so passwo
 
 Current:
 
-- `PDF.js` for viewing and page rendering
+- `PDF.js` for viewing, page rendering, text-target extraction, and annotation overlay extraction
 - `pdf-lib` for merge, extract, rotate, reorder, direct page-overlay editing, and restricted content-stream text rewrites on simple born-digital PDFs
 
 Planned split:
@@ -151,11 +151,18 @@ Planned split:
 
 ### Mutate Document
 
-1. UI triggers an operation such as rotate, reorder, merge, insert, watermark, image stamping, review notes, page numbering, or AcroForm filling.
+1. UI triggers an operation such as rotate, reorder, merge, insert, watermark, image stamping, sticky-note or text-markup annotation, review notes, page numbering, or AcroForm filling.
 2. Frontend uses the document mutation layer to produce a new byte stream.
 3. Rust re-inspects the updated bytes.
 4. Frontend replaces the active workspace with the new classified document.
 5. Document remains in memory until explicitly saved.
+
+### Annotate Document
+
+1. Frontend uses `PDF.js` text geometry to target existing born-digital text or a manual page position.
+2. The annotation module writes true PDF annotations into the page `Annots` array locally through `pdf-lib`.
+3. The viewer extracts current-page annotations back out of the PDF so highlights and sticky notes stay visible inside Sampadan's overlay layer.
+4. Saved PDFs preserve those annotations for other readers instead of flattening them into page content by default.
 
 ### Fill Standard Forms
 
@@ -228,11 +235,13 @@ These are the modules the codebase should grow into instead of adding more logic
 - `src/lib/session/recent-files.ts`
   Current recent-file persistence module
 - `src/lib/viewer/pdf-viewer.ts`
-  PDF.js canvas rendering, thumbnails, text extraction, and page text-target geometry
+  PDF.js canvas rendering, thumbnails, text extraction, annotation extraction, and page text-target geometry
 - `src/lib/conversion/document-export.ts`
   local Markdown, HTML, and DOCX generation from extracted PDF text
 - `src/lib/operations/pdf-document.ts`
   merge, insert, rotate, extract, reorder, split, watermark, image stamping, review notes, true page-edit overlays, restricted content-stream text rewrites, text-targeted replacement fallback, embedded attachments, page numbering, metadata, and export helpers
+- `src/lib/operations/pdf-annotations.ts`
+  true sticky-note and text-markup PDF annotation writes for highlights, underlines, and strikeouts
 - `src/lib/operations/pdf-forms.ts`
   standard AcroForm field discovery, field-value application, and form flattening
 - `src/lib/types.ts`
@@ -244,9 +253,11 @@ These are the modules the codebase should grow into instead of adding more logic
 - `src/App.workflow.test.ts`
   real-PDF workflow regression for open, encrypted unlock, mutate, form fill/flatten, metadata, save, merge, and export paths
 - `src/test/pdf-fixtures.ts`
-  generated real-PDF fixtures, including fillable AcroForm samples, plus document summary helpers used by regression tests
+  generated real-PDF fixtures, including fillable AcroForm samples and annotation summary helpers used by regression tests
 - `src/lib/operations/pdf-document.test.ts`
   real-byte coverage for structural edits and metadata round-trips
+- `src/lib/operations/pdf-annotations.test.ts`
+  real-byte coverage for sticky-note and text-markup PDF annotations
 - `src/lib/operations/pdf-forms.test.ts`
   real-byte coverage for standard AcroForm field discovery, fill, and flatten flows
 - `src/lib/conversion/`
@@ -339,13 +350,14 @@ Status on March 18, 2026:
 - write-side protected-copy export implemented through local qpdf
 - encrypted-PDF unlock into editable workspace implemented through local qpdf
 - true page editing implemented through positioned text-block and whiteout-replace PDF mutations
+- true PDF annotation support implemented for sticky notes plus highlight, underline, and strikeout markup
 - text-targeted replacement implemented from PDF.js-extracted page text geometry for born-digital PDFs
 - restricted content-stream rewrite implemented for width-safe `Tj`, split `Tj`/`TJ` sequences, `TJ`, and line-show text operators on simple standard-font born-digital PDFs, with automatic overlay fallback on harder documents
 - Markdown, HTML, and DOCX conversion/export implemented locally from extracted PDF text
 - detached CMS signature integrity verification implemented through local OpenSSL
 - signer certificate inventory implemented through local OpenSSL
 - local CA-store certificate-chain trust attempts implemented
-- regression tests now cover critical viewer, OCR, trust, edit, and export controls
+- regression tests now cover critical viewer, OCR, trust, annotation, edit, and export controls
 - real-PDF regression coverage now exercises open, reorder, duplicate, delete, blank-page insert, extract, metadata apply, save, merge, and export flows
 - revocation and deeper timestamp authority validation still pending
 

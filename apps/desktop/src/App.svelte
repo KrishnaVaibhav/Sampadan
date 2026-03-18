@@ -16,6 +16,11 @@
     readFormFieldsFromDocument,
   } from './lib/operations/pdf-forms'
   import {
+    addStickyNoteAnnotationToDocument,
+    addTextMarkupAnnotationToDocument,
+    type PdfMarkupAnnotationKind,
+  } from './lib/operations/pdf-annotations'
+  import {
     addAttachmentToDocument,
     addFreeTextBlockToDocument,
     addReviewNoteToDocument,
@@ -63,6 +68,7 @@
     PageThumbnail,
     PdfFormField,
     PdfFormFieldValue,
+    PdfPageAnnotationOverlay,
     PdfPageTextSpan,
     PdfFlags,
     PdfMetadataDraft,
@@ -76,6 +82,7 @@
   import {
     extractDocumentText,
     extractDocumentTextPages,
+    extractPageAnnotations,
     extractPageTextSpans,
     generatePageThumbnails,
     renderPdfPageToCanvas,
@@ -179,8 +186,10 @@
   let metadataToken = 0
   let formFieldToken = 0
   let textSpanToken = 0
+  let annotationToken = 0
   let thumbnails: PageThumbnail[] = []
   let currentPageTextSpans: PdfPageTextSpan[] = []
+  let currentPageAnnotations: PdfPageAnnotationOverlay[] = []
   let selectedTextSpanId: string | null = null
   let selectedTextSpan: PdfPageTextSpan | null = null
   let textTargetMode = false
@@ -1399,6 +1408,41 @@
     })
   }
 
+  async function addStickyNoteAnnotation() {
+    if (!workspace || busy) return
+
+    const contents = reviewNoteBody.trim()
+    if (!contents) {
+      reportError(new Error('Enter note text before adding a sticky note annotation.'), 'Sticky note text is required')
+      return
+    }
+
+    const noteAnchor = resolveStickyNoteAnchor()
+    if (!noteAnchor) {
+      return
+    }
+
+    const currentWorkspace = workspace
+    const pageIndexes = resolveEditPageIndexes(currentWorkspace)
+    const scopeLabel = formatEditScopeLabel(currentWorkspace)
+
+    await runDocumentMutation({
+      workingStatus: `Adding sticky note annotation to ${scopeLabel}`,
+      successStatus: `Added sticky note annotation to ${scopeLabel}`,
+      errorStatus: 'Failed to add the sticky note annotation',
+      nextCurrentPage: currentPage,
+      mutate: () =>
+        addStickyNoteAnnotationToDocument(currentWorkspace.bytes, {
+          title: reviewNoteTitle,
+          contents,
+          pageIndexes,
+          xPercent: noteAnchor.xPercent,
+          yPercent: noteAnchor.yPercent,
+          tone: reviewNoteTone,
+        }),
+    })
+  }
+
   async function placeTextBlock() {
     if (!workspace || busy) return
 
@@ -1513,6 +1557,31 @@
     }
   }
 
+  async function addSelectedTextMarkup(kind: PdfMarkupAnnotationKind) {
+    if (!workspace || busy || !selectedTextSpan) return
+
+    const currentWorkspace = workspace
+    const kindLabel = kind === 'strikeout' ? 'strikeout' : kind
+
+    await runDocumentMutation({
+      workingStatus: `Adding ${kindLabel} annotation to page ${currentPage}`,
+      successStatus: `Added ${kindLabel} annotation to page ${currentPage}`,
+      errorStatus: `Failed to add the ${kindLabel} annotation`,
+      nextCurrentPage: currentPage,
+      mutate: () =>
+        addTextMarkupAnnotationToDocument(currentWorkspace.bytes, {
+          kind,
+          pageIndex: currentPage - 1,
+          xPercent: selectedTextSpan.xPercent,
+          yPercent: selectedTextSpan.yPercent,
+          widthPercent: selectedTextSpan.widthPercent,
+          heightPercent: selectedTextSpan.heightPercent,
+          title: reviewNoteTitle.trim() || 'Sampadan',
+          contents: reviewNoteBody.trim(),
+        }),
+    })
+  }
+
   async function runDocumentMutation(options: {
     workingStatus: string
     successStatus: string
@@ -1584,6 +1653,7 @@
     }
 
     void refreshCurrentPageTextTargets(pageNumber, pageScale, token)
+    void refreshCurrentPageAnnotations(pageNumber, pageScale, token)
   }
 
   async function commitGeneratedPdf(
@@ -1641,6 +1711,7 @@
     rangeExpression = String(currentPage)
     thumbnails = []
     currentPageTextSpans = []
+    currentPageAnnotations = []
     selectedTextSpanId = null
     renderedPageWidth = 0
     renderedPageHeight = 0
@@ -1670,6 +1741,7 @@
     rangeExpression = '1'
     thumbnails = []
     currentPageTextSpans = []
+    currentPageAnnotations = []
     selectedTextSpanId = null
     renderedPageWidth = 0
     renderedPageHeight = 0
@@ -1806,6 +1878,32 @@
       if (nextTextSpanToken === textSpanToken) {
         currentPageTextSpans = []
         selectedTextSpanId = null
+      }
+    }
+  }
+
+  async function refreshCurrentPageAnnotations(pageNumber: number, scale: number, renderId: number) {
+    if (!pdfProxy || !workspace) {
+      currentPageAnnotations = []
+      return
+    }
+
+    const nextAnnotationToken = ++annotationToken
+
+    try {
+      const annotations = await extractPageAnnotations(pdfProxy, pageNumber, scale)
+      if (
+        renderId !== renderToken ||
+        nextAnnotationToken !== annotationToken ||
+        pageNumber !== currentPage
+      ) {
+        return
+      }
+
+      currentPageAnnotations = annotations
+    } catch {
+      if (nextAnnotationToken === annotationToken) {
+        currentPageAnnotations = []
       }
     }
   }
@@ -2044,6 +2142,50 @@
       fontSize,
       alignment: textEditAlignment,
     }
+  }
+
+  function resolveStickyNoteAnchor() {
+    if (selectedTextSpan) {
+      return {
+        xPercent: clamp(selectedTextSpan.xPercent + selectedTextSpan.widthPercent + 1.2, 0, 96),
+        yPercent: clamp(selectedTextSpan.yPercent, 0, 96),
+      }
+    }
+
+    const layout = resolveTextEditLayout()
+    if (!layout) {
+      return null
+    }
+
+    return {
+      xPercent: layout.xPercent,
+      yPercent: layout.yPercent,
+    }
+  }
+
+  function formatAnnotationTooltip(annotation: PdfPageAnnotationOverlay) {
+    const kindLabel =
+      annotation.kind === 'strikeout'
+        ? 'Strikeout annotation'
+        : annotation.kind === 'underline'
+          ? 'Underline annotation'
+          : annotation.kind === 'highlight'
+            ? 'Highlight annotation'
+            : 'Sticky note annotation'
+
+    if (annotation.title && annotation.contents) {
+      return `${kindLabel}: ${annotation.title} - ${annotation.contents}`
+    }
+
+    if (annotation.contents) {
+      return `${kindLabel}: ${annotation.contents}`
+    }
+
+    if (annotation.title) {
+      return `${kindLabel}: ${annotation.title}`
+    }
+
+    return kindLabel
   }
 
   function toggleTextTargetMode() {
@@ -2538,9 +2680,22 @@
             ></textarea>
           </label>
         </div>
-        <button data-testid="review-note-button" on:click={addReviewNote} disabled={busy || !workspace || !reviewNoteBody.trim()}>
-          Add Review Note
-        </button>
+        <div class="tool-grid">
+          <button
+            data-testid="sticky-note-button"
+            on:click={addStickyNoteAnnotation}
+            disabled={busy || !workspace || !reviewNoteBody.trim()}
+          >
+            Add Sticky Note
+          </button>
+          <button
+            data-testid="review-note-button"
+            on:click={addReviewNote}
+            disabled={busy || !workspace || !reviewNoteBody.trim()}
+          >
+            Add Review Note
+          </button>
+        </div>
 
         <div class="inspector-block">
           <span class="meta-label">True Edit</span>
@@ -2565,6 +2720,29 @@
               disabled={busy || !workspace || !selectedTextSpan || !textEditContent.trim()}
             >
               Replace Selected Text
+            </button>
+          </div>
+          <div class="tool-grid compact-tool-grid">
+            <button
+              data-testid="highlight-selected-text-button"
+              on:click={() => addSelectedTextMarkup('highlight')}
+              disabled={busy || !workspace || !selectedTextSpan}
+            >
+              Highlight Text
+            </button>
+            <button
+              data-testid="underline-selected-text-button"
+              on:click={() => addSelectedTextMarkup('underline')}
+              disabled={busy || !workspace || !selectedTextSpan}
+            >
+              Underline Text
+            </button>
+            <button
+              data-testid="strikeout-selected-text-button"
+              on:click={() => addSelectedTextMarkup('strikeout')}
+              disabled={busy || !workspace || !selectedTextSpan}
+            >
+              Strike Out Text
             </button>
           </div>
           {#if selectedTextSpan}
@@ -2811,6 +2989,29 @@
               style:height={renderedPageHeight ? `${renderedPageHeight}px` : undefined}
             >
               <canvas bind:this={viewerCanvas}></canvas>
+              {#if currentPageAnnotations.length > 0}
+                <div class="annotation-layer">
+                  {#each currentPageAnnotations as annotation}
+                    {#if annotation.kind === 'text'}
+                      <div
+                        class="annotation-note"
+                        title={formatAnnotationTooltip(annotation)}
+                        style={`left:${annotation.xPercent}%;top:${annotation.yPercent}%;--annotation-color:${annotation.colorCss};`}
+                      >
+                        <span>!</span>
+                      </div>
+                    {:else}
+                      {#each annotation.quads.length > 0 ? annotation.quads : [annotation] as quad}
+                        <div
+                          class={`annotation-mark annotation-mark-${annotation.kind}`}
+                          title={formatAnnotationTooltip(annotation)}
+                          style={`left:${quad.xPercent}%;top:${quad.yPercent}%;width:${Math.max(quad.widthPercent, 0.6)}%;height:${Math.max(quad.heightPercent, 0.4)}%;--annotation-color:${annotation.colorCss};--annotation-opacity:${annotation.opacity};`}
+                        ></div>
+                      {/each}
+                    {/if}
+                  {/each}
+                </div>
+              {/if}
               {#if textTargetMode && currentPageTextSpans.length > 0}
                 <div class="text-target-layer">
                   {#each currentPageTextSpans as span}
