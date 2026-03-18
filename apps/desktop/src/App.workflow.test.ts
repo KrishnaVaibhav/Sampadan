@@ -26,8 +26,10 @@ vi.mock('./lib/pdf-engine', async () => {
   return {
     ...actual,
     loadPdfProxy: vi.fn(async (bytes: Uint8Array) => {
+      const safeBytes = bytes.slice()
+      detachBytes(bytes)
       const { PDFDocument } = await actual.getPdfLib()
-      const document = await PDFDocument.load(bytes.slice(), { updateMetadata: false })
+      const document = await PDFDocument.load(safeBytes, { updateMetadata: false })
       const pageCount = document.getPageCount()
 
       return {
@@ -65,6 +67,10 @@ const decodeBase64 = (value: string) =>
   Uint8Array.from(atob(value), (character) => character.charCodeAt(0))
 
 const fileNameFromPath = (path: string) => path.split(/[\\/]/).pop() ?? path
+
+const detachBytes = (bytes: Uint8Array) => {
+  structuredClone(bytes, { transfer: [bytes.buffer] })
+}
 
 const emptyTrustReport: PdfTrustReport = {
   signatureCount: 0,
@@ -121,6 +127,63 @@ beforeEach(() => {
 })
 
 describe('real PDF workflow actions', () => {
+  test('opening a different PDF while another is open does not trigger detached buffer errors', async () => {
+    const firstPath = 'C:/docs/first.pdf'
+    const secondPath = 'C:/docs/second.pdf'
+    const diskFiles = new Map<string, Uint8Array>([
+      [firstPath, await createSamplePdf(2)],
+      [secondPath, await createSamplePdf(4)],
+    ])
+    const openSelections = [firstPath, secondPath]
+
+    invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      switch (command) {
+        case 'get_ocr_status':
+          return {
+            available: false,
+            binaryPath: null,
+            version: null,
+            languages: [],
+            recommendedLanguage: 'eng',
+            missingReason: 'Tesseract not installed for this workflow test',
+          }
+        case 'load_pdf': {
+          const path = String(args?.path ?? '')
+          const storedBytes = diskFiles.get(path)
+          if (!storedBytes) {
+            throw new Error(`No PDF fixture registered for ${path}`)
+          }
+          return buildPayload(new Uint8Array(Array.from(storedBytes)), fileNameFromPath(path), path)
+        }
+        case 'save_file_bytes':
+          return null
+        case 'inspect_pdf_bytes':
+          throw new Error('No mutation expected in reopen test')
+        default:
+          throw new Error(`Unexpected invoke command: ${command}`)
+      }
+    })
+
+    openDialogMock.mockImplementation(async () => openSelections.shift() ?? null)
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect(screen.getAllByText('first.pdf').length).toBeGreaterThan(0)
+      expect(screen.getByText('1/2 pages')).toBeTruthy()
+    })
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect(screen.getAllByText('second.pdf').length).toBeGreaterThan(0)
+      expect(screen.getByText('1/4 pages')).toBeTruthy()
+    })
+
+    expect(screen.queryByText('Last error')).toBeNull()
+  })
+
   test('button flows mutate and export real PDF bytes without throwing', async () => {
     const sourcePath = 'C:/docs/workflow.pdf'
     const mergePath = 'C:/docs/merge-source.pdf'

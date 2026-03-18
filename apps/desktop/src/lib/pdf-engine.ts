@@ -23,7 +23,9 @@ export async function getPdfLib() {
 
 export async function loadPdfProxy(bytes: Uint8Array) {
   const { getDocument } = await getPdfJs()
-  return getDocument({ data: bytes }).promise
+  // PDF.js may transfer the provided buffer to its worker. Keep caller-owned
+  // bytes intact by always handing the viewer its own copy.
+  return getDocument({ data: bytes.slice() }).promise
 }
 
 export type PdfProxy = Awaited<ReturnType<typeof loadPdfProxy>>

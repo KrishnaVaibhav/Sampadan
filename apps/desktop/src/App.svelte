@@ -857,7 +857,7 @@
     } = {},
   ) {
     const bytes = base64ToBytes(payload.bytesBase64)
-    const nextProxy = await loadPdfProxy(bytes)
+    const nextProxy = await loadPdfProxy(bytes.slice())
 
     if (pdfProxy) {
       await pdfProxy.destroy()
