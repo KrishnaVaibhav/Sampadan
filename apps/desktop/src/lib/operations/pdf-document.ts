@@ -537,6 +537,7 @@ function parseAdjustedTextArrayToken(token: ArrayToken): Array<TextOperandToken 
 
 function resolveTextShowCandidate(
   operatorName: string,
+  operatorEnd: number,
   operands: ParsedContentToken[],
   pdfLib: Awaited<ReturnType<typeof getPdfLib>>,
 ) {
@@ -549,7 +550,9 @@ function resolveTextShowCandidate(
   ) {
     return {
       token: operand,
+      operatorEnd,
       decodedText: decodeTextOperand(operand, pdfLib),
+      operatorName,
       replacementRaw: (replacementHex: string) => replacementHex,
     }
   }
@@ -562,10 +565,12 @@ function resolveTextShowCandidate(
 
     return {
       token: operand,
+      operatorEnd,
       decodedText: segments
         .filter((segment): segment is TextOperandToken => segment.kind === 'string' || segment.kind === 'hex')
         .map((segment) => decodeTextOperand(segment, pdfLib))
         .join(''),
+      operatorName,
       replacementRaw: (replacementHex: string) => `[${replacementHex}]`,
     }
   }
@@ -649,6 +654,57 @@ async function attemptContentStreamTextReplacement(
     let currentFontKey: string | null = null
     let currentFontSize = options.fontSize
     let operands: ParsedContentToken[] = []
+    let pendingSequence: Array<
+      NonNullable<ReturnType<typeof resolveTextShowCandidate>>
+    > = []
+
+    const tryReplaceCandidates = (candidates: typeof pendingSequence) => {
+      if (candidates.length === 0) {
+        return undefined
+      }
+
+      const combinedText = candidates.map((candidate) => candidate.decodedText).join('')
+      if (normalizeTextForMatch(combinedText) !== normalizedTarget) {
+        return undefined
+      }
+
+      if (matchedTargetIndex !== options.targetOccurrence) {
+        matchedTargetIndex += 1
+        return undefined
+      }
+
+      const font = currentFontKey ? standardFonts.get(currentFontKey) : null
+      if (!font) {
+        return null
+      }
+
+      let replacementHex: string
+      try {
+        replacementHex = font.embedder.encodeText(options.replacementText).toString()
+      } catch {
+        return null
+      }
+
+      const replacementWidth = font.embedder.widthOfTextAtSize(options.replacementText, currentFontSize)
+      if (replacementWidth > availableWidth + Math.max(4, currentFontSize * 0.35)) {
+        return null
+      }
+
+      if (candidates.length === 1) {
+        const [candidate] = candidates
+        return `${content.slice(0, candidate.token.start)}${candidate.replacementRaw(replacementHex)}${content.slice(candidate.token.end)}`
+      }
+
+      const first = candidates[0]
+      const last = candidates[candidates.length - 1]
+      return `${content.slice(0, first.token.start)}[${replacementHex}] TJ${content.slice(last.operatorEnd)}`
+    }
+
+    const flushPendingSequence = () => {
+      const result = tryReplaceCandidates(pendingSequence)
+      pendingSequence = []
+      return result
+    }
 
     while (true) {
       const token = readNextContentToken(content, cursor)
@@ -667,6 +723,13 @@ async function attemptContentStreamTextReplacement(
         continue
       }
 
+      if (token.raw !== 'Tj' && token.raw !== 'TJ') {
+        const sequenceResult = flushPendingSequence()
+        if (sequenceResult === null || typeof sequenceResult === 'string') {
+          return sequenceResult
+        }
+      }
+
       if (token.raw === 'BI') {
         return null
       }
@@ -681,35 +744,26 @@ async function attemptContentStreamTextReplacement(
         continue
       }
 
-      const candidate = resolveTextShowCandidate(token.raw, operands, pdfLib)
-      if (candidate && normalizeTextForMatch(candidate.decodedText) === normalizedTarget) {
-        if (matchedTargetIndex === options.targetOccurrence) {
-          const font = currentFontKey ? standardFonts.get(currentFontKey) : null
+      const candidate = resolveTextShowCandidate(token.raw, token.end, operands, pdfLib)
+      if (candidate && (candidate.operatorName === 'Tj' || candidate.operatorName === 'TJ')) {
+        pendingSequence.push(candidate)
+        operands = []
+        continue
+      }
 
-          if (!font) {
-            return null
-          }
-
-          let replacementHex: string
-          try {
-            replacementHex = font.embedder.encodeText(options.replacementText).toString()
-          } catch {
-            return null
-          }
-
-          const replacementWidth = font.embedder.widthOfTextAtSize(options.replacementText, currentFontSize)
-          if (replacementWidth > availableWidth + Math.max(4, currentFontSize * 0.35)) {
-            return null
-          }
-
-          const replacementRaw = candidate.replacementRaw(replacementHex)
-          return `${content.slice(0, candidate.token.start)}${replacementRaw}${content.slice(candidate.token.end)}`
+      if (candidate) {
+        const candidateResult = tryReplaceCandidates([candidate])
+        if (candidateResult === null || typeof candidateResult === 'string') {
+          return candidateResult
         }
-
-        matchedTargetIndex += 1
       }
 
       operands = []
+    }
+
+    const finalSequenceResult = flushPendingSequence()
+    if (finalSequenceResult === null || typeof finalSequenceResult === 'string') {
+      return finalSequenceResult
     }
 
     return null

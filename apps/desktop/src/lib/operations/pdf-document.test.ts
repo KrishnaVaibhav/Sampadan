@@ -113,6 +113,75 @@ async function createAdjustedTextArrayPdf() {
   return new Uint8Array(await document.save())
 }
 
+async function createSplitTextRunPdf() {
+  const { PDFDocument, PDFName, PDFRef, PDFStream, PDFRawStream, decodePDFRawStream } = await import('pdf-lib')
+  const source = await createSamplePdf(1)
+  const document = await PDFDocument.load(source.slice(), { updateMetadata: false })
+  const page = document.getPage(0)
+  const context = page.node.context
+  const contents = page.node.normalizedEntries().Contents
+  const bodyHex = textToPdfHex('Body content for page 1')
+  const bodyPrefixHex = textToPdfHex('Body content ')
+  const bodySuffixHex = textToPdfHex('for page 1')
+  let rewritten = false
+
+  if (!contents) {
+    throw new Error('Expected page contents for split-text PDF fixture.')
+  }
+
+  for (let index = 0; index < contents.size(); index += 1) {
+    const token = contents.get(index)
+    const stream = contents.lookupMaybe(index, PDFStream)
+    if (!stream) {
+      continue
+    }
+
+    let contentBytes: Uint8Array
+    if (stream instanceof PDFRawStream) {
+      contentBytes = decodePDFRawStream(stream).decode()
+    } else {
+      const unencoded = (stream as { getUnencodedContents?: () => Uint8Array }).getUnencodedContents
+      contentBytes = typeof unencoded === 'function' ? unencoded.call(stream) : stream.getContents()
+    }
+
+    const decoded = decodePdfContentBytes(contentBytes)
+    if (!decoded.includes(`<${bodyHex}> Tj`)) {
+      continue
+    }
+
+    const replacement = decoded.replace(
+      `<${bodyHex}> Tj`,
+      `<${bodyPrefixHex}> Tj\n<${bodySuffixHex}> Tj`,
+    )
+    const replacementStream = context.flateStream(replacement)
+    const filterName = PDFName.of('Filter')
+    const decodeParmsName = PDFName.of('DecodeParms')
+
+    for (const [key, value] of stream.dict.entries()) {
+      if (key === PDFName.Length || key === filterName || key === decodeParmsName) {
+        continue
+      }
+
+      replacementStream.dict.set(key, value)
+    }
+
+    if (token instanceof PDFRef) {
+      context.assign(token, replacementStream)
+    } else {
+      contents.set(index, replacementStream)
+    }
+
+    rewritten = true
+    break
+  }
+
+  if (!rewritten) {
+    throw new Error('Failed to create a split text-run fixture.')
+  }
+
+  return new Uint8Array(await document.save())
+}
+
 async function readPdfText(bytes: Uint8Array) {
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
   const document = await getDocument({ data: bytes.slice() }).promise
@@ -355,6 +424,28 @@ describe('real PDF document operations', () => {
     expect(replaced.strategy).toBe('content-stream')
     const text = await readPdfText(replaced.bytes)
     expect(text).toContain('Adjusted body copy')
+    expect(text).not.toContain('Body content for page 1')
+  })
+
+  test('targeted born-digital text replacement rewrites split Tj text runs when the line is width-safe', async () => {
+    const source = await createSplitTextRunPdf()
+
+    const replaced = await replaceTargetedTextInDocument(source, {
+      targetText: 'Body content for page 1',
+      replacementText: 'Split run body copy',
+      pageIndex: 0,
+      targetOccurrence: 0,
+      xPercent: 8,
+      yPercent: 10,
+      widthPercent: 36,
+      heightPercent: 4,
+      fontSize: 14,
+      alignment: 'left',
+    })
+
+    expect(replaced.strategy).toBe('content-stream')
+    const text = await readPdfText(replaced.bytes)
+    expect(text).toContain('Split run body copy')
     expect(text).not.toContain('Body content for page 1')
   })
 
