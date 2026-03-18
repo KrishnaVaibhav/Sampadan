@@ -196,20 +196,20 @@ beforeEach(() => {
       case 'save_file_bytes':
         return null
       case 'inspect_pdf_bytes':
-        return createPayload((args?.file_name as string | undefined) ?? 'generated.pdf', null)
+        return createPayload((args?.fileName as string | undefined) ?? 'generated.pdf', null)
       case 'run_ocr_image':
         return {
           language: 'eng',
           text: 'Detected text',
           durationMs: 18,
-          sourceLabel: (args?.source_label as string | undefined) ?? 'page-preview',
+          sourceLabel: (args?.sourceLabel as string | undefined) ?? 'page-preview',
         }
       case 'run_ocr_pdf':
         return {
           language: 'eng',
           bytesBase64: encodeBase64('%PDF-searchable'),
           durationMs: 25,
-          sourceLabel: (args?.source_label as string | undefined) ?? 'page-searchable-pdf',
+          sourceLabel: (args?.sourceLabel as string | undefined) ?? 'page-searchable-pdf',
         }
       default:
         throw new Error(`Unexpected invoke command: ${command}`)
@@ -312,7 +312,7 @@ describe('Sampadan desktop app regression suite', () => {
       expect(invokeMock).toHaveBeenCalledWith(
         'inspect_pdf_bytes',
         expect.objectContaining({
-          file_name: 'sample-searchable.pdf',
+          fileName: 'sample-searchable.pdf',
         }),
       )
     })

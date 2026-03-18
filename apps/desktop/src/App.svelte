@@ -360,7 +360,7 @@
         const fileName = `${withoutExtension(workspace.fileName)}-page-${String(index + 1).padStart(3, '0')}.pdf`
         await invoke('save_file_bytes', {
           path: joinPath(directory, fileName),
-          bytes_base64: bytesToBase64(segments[index]),
+          bytesBase64: bytesToBase64(segments[index]),
         })
       }
 
@@ -399,7 +399,7 @@
 
       await invoke('save_file_bytes', {
         path: targetPath,
-        bytes_base64: bytesToBase64(workspace.bytes),
+        bytesBase64: bytesToBase64(workspace.bytes),
       })
 
       await openPdfByPath(targetPath, currentPage)
@@ -437,7 +437,7 @@
 
       await invoke('save_file_bytes', {
         path: targetPath,
-        bytes_base64: await blobToBase64(blob),
+        bytesBase64: await blobToBase64(blob),
       })
 
       statusTone = 'idle'
@@ -474,7 +474,7 @@
 
         await invoke('save_file_bytes', {
           path: joinPath(directory, fileName),
-          bytes_base64: await blobToBase64(blob),
+          bytesBase64: await blobToBase64(blob),
         })
       }
 
@@ -510,7 +510,7 @@
 
       await invoke('save_file_bytes', {
         path: targetPath,
-        bytes_base64: bytesToBase64(new TextEncoder().encode(text)),
+        bytesBase64: bytesToBase64(new TextEncoder().encode(text)),
       })
 
       statusTone = 'idle'
@@ -545,7 +545,7 @@
       const report = JSON.stringify(buildTrustReportPayload(workspace), null, 2)
       await invoke('save_file_bytes', {
         path: targetPath,
-        bytes_base64: bytesToBase64(new TextEncoder().encode(report)),
+        bytesBase64: bytesToBase64(new TextEncoder().encode(report)),
       })
 
       statusTone = 'idle'
@@ -683,7 +683,7 @@
 
       await invoke('save_file_bytes', {
         path: targetPath,
-        bytes_base64: bytesToBase64(new TextEncoder().encode(ocrPreview)),
+        bytesBase64: bytesToBase64(new TextEncoder().encode(ocrPreview)),
       })
 
       statusTone = 'idle'
@@ -835,8 +835,8 @@
     },
   ) {
     const payload = await invoke<LoadedPdfPayload>('inspect_pdf_bytes', {
-      file_name: options.fileName,
-      bytes_base64: bytesToBase64(bytes),
+      fileName: options.fileName,
+      bytesBase64: bytesToBase64(bytes),
     })
 
     await loadPayload(payload, {

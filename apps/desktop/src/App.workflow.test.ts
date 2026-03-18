@@ -218,17 +218,17 @@ describe('real PDF workflow actions', () => {
           return buildPayload(bytes, fileNameFromPath(path), path)
         }
         case 'inspect_pdf_bytes': {
-          const nextBytes = decodeBase64(String(args?.bytes_base64 ?? ''))
+          const nextBytes = decodeBase64(String(args?.bytesBase64 ?? ''))
           currentBytes = nextBytes
           return buildPayload(
             nextBytes,
-            String(args?.file_name ?? 'generated.pdf'),
+            String(args?.fileName ?? 'generated.pdf'),
             null,
           )
         }
         case 'save_file_bytes': {
           const path = String(args?.path ?? '')
-          const bytes = decodeBase64(String(args?.bytes_base64 ?? ''))
+          const bytes = decodeBase64(String(args?.bytesBase64 ?? ''))
           if (path.toLowerCase().endsWith('.pdf')) {
             diskFiles.set(path, bytes)
           }
