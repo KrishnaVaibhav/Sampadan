@@ -49,6 +49,18 @@ vi.mock('./lib/viewer/pdf-viewer', () => ({
     { pageNumber: 2, dataUrl: 'data:image/jpeg;base64,ZmFrZQ==', width: 120, height: 160 },
     { pageNumber: 3, dataUrl: 'data:image/jpeg;base64,ZmFrZQ==', width: 120, height: 160 },
   ]),
+  extractPageTextSpans: vi.fn(async (_pdfProxy, pageNumber: number) => [
+    {
+      id: `target-${pageNumber}`,
+      pageNumber,
+      text: `Page ${pageNumber} line`,
+      xPercent: 12,
+      yPercent: 14,
+      widthPercent: 24,
+      heightPercent: 4,
+      fontSize: 16,
+    },
+  ]),
   extractDocumentTextPages: vi.fn(async () => ['Page 1 text', 'Page 2 text', 'Page 3 text']),
   extractDocumentText: vi.fn(async () => 'Document text'),
 }))
@@ -620,6 +632,32 @@ describe('Sampadan desktop app regression suite', () => {
 
     expectCamelCasePayloadKeys(getInvokePayloads('run_ocr_image'), ['bytesBase64', 'language', 'sourceLabel'])
     expectCamelCasePayloadKeys(getInvokePayloads('save_file_bytes'), ['path', 'bytesBase64'])
+  })
+
+  test('targets existing page text before replacing it', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect((screen.getByTestId('toggle-text-target-button') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    await user.click(screen.getByTestId('toggle-text-target-button'))
+    await waitFor(() => {
+      expect(screen.getByLabelText('Target text: Page 1 line')).toBeTruthy()
+    })
+
+    await user.click(screen.getByLabelText('Target text: Page 1 line'))
+    await user.clear(screen.getByLabelText('Edit Text'))
+    await user.type(screen.getByLabelText('Edit Text'), 'Updated page 1 line')
+    await user.click(screen.getByTestId('replace-selected-text-button'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Replaced selected text on page 1')).toBeTruthy()
+    })
   })
 
   test('exports a protected copy through the local qpdf pipeline', async () => {

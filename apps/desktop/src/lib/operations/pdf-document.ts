@@ -445,6 +445,7 @@ export async function replaceRegionWithTextInDocument(
     heightPercent: number
     fontSize: number
     alignment: TextEditAlignment
+    autoFit?: boolean
   },
 ) {
   const { StandardFonts, rgb } = await getPdfLib()
@@ -452,7 +453,7 @@ export async function replaceRegionWithTextInDocument(
   const font = await document.embedFont(StandardFonts.Helvetica)
   const text = options.text.trim()
   const pageIndexes = normalizePageIndexes(options.pageIndexes, document.getPageCount())
-  const fontSize = clampNumber(options.fontSize, 8, 72)
+  const baseFontSize = clampNumber(options.fontSize, 8, 72)
 
   for (const pageIndex of pageIndexes) {
     const page = document.getPage(pageIndex)
@@ -484,9 +485,14 @@ export async function replaceRegionWithTextInDocument(
     }
 
     const maxTextWidth = Math.max(36, rect.width - padding * 2)
-    const lineHeight = fontSize * 1.24
-    const maxLines = Math.max(1, Math.floor((rect.height - padding * 2 + fontSize * 0.2) / lineHeight))
-    const lines = wrapTextToWidth(text, font, fontSize, maxTextWidth, maxLines)
+    const { fontSize, lines, lineHeight } = resolveFittedTextLayout({
+      text,
+      font,
+      requestedSize: baseFontSize,
+      maxTextWidth,
+      maxTextHeight: Math.max(18, rect.height - padding * 2),
+      autoFit: options.autoFit ?? false,
+    })
 
     for (const [lineIndex, line] of lines.entries()) {
       const textWidth = font.widthOfTextAtSize(line, fontSize)
@@ -507,6 +513,38 @@ export async function replaceRegionWithTextInDocument(
   }
 
   return saveDocument(document)
+}
+
+function resolveFittedTextLayout(options: {
+  text: string
+  font: { widthOfTextAtSize: (text: string, size: number) => number }
+  requestedSize: number
+  maxTextWidth: number
+  maxTextHeight: number
+  autoFit: boolean
+}) {
+  let fontSize = options.requestedSize
+
+  while (fontSize >= 8) {
+    const lineHeight = fontSize * 1.24
+    const maxLines = Math.max(1, Math.floor((options.maxTextHeight + fontSize * 0.2) / lineHeight))
+    const lines = wrapTextToWidth(options.text, options.font, fontSize, options.maxTextWidth, maxLines)
+    const requiredHeight = Math.max(fontSize, lines.length * lineHeight)
+
+    if (!options.autoFit || requiredHeight <= options.maxTextHeight || fontSize <= 8) {
+      return { fontSize, lines, lineHeight }
+    }
+
+    fontSize -= 1
+  }
+
+  const lineHeight = 8 * 1.24
+  const maxLines = Math.max(1, Math.floor((options.maxTextHeight + 8 * 0.2) / lineHeight))
+  return {
+    fontSize: 8,
+    lines: wrapTextToWidth(options.text, options.font, 8, options.maxTextWidth, maxLines),
+    lineHeight,
+  }
 }
 
 export async function addImageStampToDocument(

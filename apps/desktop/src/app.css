@@ -591,6 +591,41 @@ button:disabled {
   background: #ffffff;
 }
 
+.viewer-surface {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.text-target-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.text-target-hitbox {
+  position: absolute;
+  min-width: 8px;
+  min-height: 8px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 190, 92, 0.72);
+  background: rgba(255, 190, 92, 0.16);
+  box-shadow: 0 0 0 1px rgba(14, 20, 28, 0.2);
+  pointer-events: auto;
+}
+
+.text-target-hitbox:hover:not(:disabled),
+.text-target-hitbox.selected {
+  border-color: rgba(99, 178, 255, 0.92);
+  background: rgba(99, 178, 255, 0.22);
+  transform: none;
+}
+
+.ghost-button {
+  background: rgba(23, 34, 47, 0.7);
+  border-style: dashed;
+}
+
 .hero-viewer .viewer-pane {
   min-height: clamp(28rem, 68vh, 64rem);
 }

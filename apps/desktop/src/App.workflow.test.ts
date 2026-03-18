@@ -35,11 +35,31 @@ vi.mock('./lib/pdf-engine', async () => {
       return {
         numPages: pageCount,
         getPage: async (pageNumber: number) => ({
-          getViewport: ({ scale }: { scale: number }) => ({ width: 595 * scale, height: 842 * scale }),
+          getViewport: ({ scale }: { scale: number }) => ({
+            width: 595 * scale,
+            height: 842 * scale,
+            scale,
+            transform: [scale, 0, 0, -scale, 0, 842 * scale],
+          }),
           render: () => ({ promise: Promise.resolve() }),
           cleanup: () => undefined,
           getTextContent: async () => ({
-            items: [{ str: `Sample page ${pageNumber}`, hasEOL: true }],
+            items: [
+              {
+                str: `Sample page ${pageNumber}`,
+                hasEOL: false,
+                width: 92,
+                height: 16,
+                transform: [16, 0, 0, 16, 72, 760],
+              },
+              {
+                str: 'headline',
+                hasEOL: true,
+                width: 60,
+                height: 16,
+                transform: [16, 0, 0, 16, 172, 760],
+              },
+            ],
           }),
         }),
         destroy: async () => undefined,
@@ -52,6 +72,26 @@ vi.mock('./lib/session/recent-files', () => ({
   loadRecentPaths: vi.fn(() => []),
   rememberRecentPath: vi.fn((paths: string[], path: string) => [path, ...paths.filter((candidate) => candidate !== path)]),
 }))
+
+vi.mock('./lib/viewer/pdf-viewer', async () => {
+  const actual = await vi.importActual<typeof import('./lib/viewer/pdf-viewer')>('./lib/viewer/pdf-viewer')
+
+  return {
+    ...actual,
+    extractPageTextSpans: vi.fn(async (_pdfProxy, pageNumber: number) => [
+      {
+        id: `workflow-target-${pageNumber}`,
+        pageNumber,
+        text: `Sample page ${pageNumber} headline`,
+        xPercent: 12,
+        yPercent: 14,
+        widthPercent: 26,
+        heightPercent: 4,
+        fontSize: 16,
+      },
+    ]),
+  }
+})
 
 import App from './App.svelte'
 
@@ -471,6 +511,19 @@ describe('real PDF workflow actions', () => {
     await user.click(screen.getByRole('button', { name: 'Place Image Stamp' }))
     await waitFor(() => {
       expect(screen.getByText('Placed image stamp on page 2')).toBeTruthy()
+    })
+
+    await user.click(screen.getByTestId('toggle-text-target-button'))
+    await waitFor(() => {
+      expect(screen.getByLabelText('Target text: Sample page 2 headline')).toBeTruthy()
+    })
+
+    await user.click(screen.getByLabelText('Target text: Sample page 2 headline'))
+    await user.clear(screen.getByLabelText('Edit Text'))
+    await user.type(screen.getByLabelText('Edit Text'), 'Selected replacement text')
+    await user.click(screen.getByTestId('replace-selected-text-button'))
+    await waitFor(() => {
+      expect(screen.getByText('Replaced selected text on page 2')).toBeTruthy()
     })
 
     await user.clear(screen.getByLabelText('Edit Text'))

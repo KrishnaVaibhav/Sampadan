@@ -55,6 +55,7 @@
     LoadedPdfPayload,
     OcrStatusPayload,
     PageThumbnail,
+    PdfPageTextSpan,
     PdfFlags,
     PdfMetadataDraft,
     PdfProtectionModifyAccess,
@@ -67,6 +68,7 @@
   import {
     extractDocumentText,
     extractDocumentTextPages,
+    extractPageTextSpans,
     generatePageThumbnails,
     renderPdfPageToCanvas,
   } from './lib/viewer/pdf-viewer'
@@ -154,6 +156,8 @@
   let viewerPane: HTMLDivElement | null = null
   let pdfProxy: PdfProxy | null = null
   let workspace: WorkspaceDocument | null = null
+  let renderedPageWidth = 0
+  let renderedPageHeight = 0
   let pendingEncryptedPdf: PendingEncryptedPdf | null = null
   let currentPage = 1
   let zoom = 1.1
@@ -165,7 +169,12 @@
   let renderToken = 0
   let thumbnailToken = 0
   let metadataToken = 0
+  let textSpanToken = 0
   let thumbnails: PageThumbnail[] = []
+  let currentPageTextSpans: PdfPageTextSpan[] = []
+  let selectedTextSpanId: string | null = null
+  let selectedTextSpan: PdfPageTextSpan | null = null
+  let textTargetMode = false
   let rangeExpression = '1'
   let metadataDraft = emptyMetadata()
   let metadataDirty = false
@@ -205,6 +214,7 @@
   $: currentZoomLabel = `${Math.round(zoom * 100)}%`
   $: activeDocumentName = workspace?.fileName ?? pendingEncryptedPdf?.payload.fileName ?? 'No PDF loaded'
   $: viewerStatusLabel = workspace ? `Page ${currentPage} of ${workspace.pageCount}` : pendingEncryptedPdf ? 'Locked until unlocked' : 'Idle'
+  $: selectedTextSpan = currentPageTextSpans.find((span) => span.id === selectedTextSpanId) ?? null
   $: thumbnailMap = new Map(thumbnails.map((thumbnail) => [thumbnail.pageNumber, thumbnail]))
   $: ocrAvailableLanguages = ocrStatus?.languages ?? []
   $: ocrReady = ocrStatus?.available ?? false
@@ -1383,6 +1393,38 @@
           text: textEditContent,
           pageIndexes,
           ...layout,
+          autoFit: true,
+        }),
+    })
+  }
+
+  async function replaceSelectedTextTarget() {
+    if (!workspace || busy || !selectedTextSpan) return
+
+    const replacementText = textEditContent.trim()
+    if (!replacementText) {
+      reportError(new Error('Enter replacement text before editing the selected page text.'), 'Replacement text is required')
+      return
+    }
+
+    const currentWorkspace = workspace
+
+    await runDocumentMutation({
+      workingStatus: `Replacing selected text on page ${currentPage}`,
+      successStatus: `Replaced selected text on page ${currentPage}`,
+      errorStatus: 'Failed to replace the selected page text',
+      nextCurrentPage: currentPage,
+      mutate: () =>
+        replaceRegionWithTextInDocument(currentWorkspace.bytes, {
+          text: replacementText,
+          pageIndexes: [currentPage - 1],
+          xPercent: selectedTextSpan.xPercent,
+          yPercent: selectedTextSpan.yPercent,
+          widthPercent: selectedTextSpan.widthPercent,
+          heightPercent: selectedTextSpan.heightPercent,
+          fontSize: selectedTextSpan.fontSize,
+          alignment: textEditAlignment,
+          autoFit: true,
         }),
     })
   }
@@ -1447,11 +1489,17 @@
     if (!workspace || !viewerCanvas || !pdfProxy) return
 
     const token = ++renderToken
+    const pageNumber = currentPage
+    const pageScale = zoom
     await renderPdfPageToCanvas(pdfProxy, currentPage, zoom, viewerCanvas)
+    renderedPageWidth = Number.parseFloat(viewerCanvas.style.width) || viewerCanvas.clientWidth || viewerCanvas.width
+    renderedPageHeight = Number.parseFloat(viewerCanvas.style.height) || viewerCanvas.clientHeight || viewerCanvas.height
 
     if (token !== renderToken) {
       return
     }
+
+    void refreshCurrentPageTextTargets(pageNumber, pageScale, token)
   }
 
   async function commitGeneratedPdf(
@@ -1508,6 +1556,10 @@
     currentPage = clamp(options.current ?? 1, 1, nextProxy.numPages)
     rangeExpression = String(currentPage)
     thumbnails = []
+    currentPageTextSpans = []
+    selectedTextSpanId = null
+    renderedPageWidth = 0
+    renderedPageHeight = 0
     metadataDraft = emptyMetadata()
     metadataDirty = false
     ocrPreview = ''
@@ -1528,6 +1580,10 @@
     currentPage = 1
     rangeExpression = '1'
     thumbnails = []
+    currentPageTextSpans = []
+    selectedTextSpanId = null
+    renderedPageWidth = 0
+    renderedPageHeight = 0
     metadataDraft = emptyMetadata()
     metadataDirty = false
     ocrPreview = ''
@@ -1604,6 +1660,33 @@
     } catch {
       if (nextThumbnailToken === thumbnailToken) {
         thumbnails = []
+      }
+    }
+  }
+
+  async function refreshCurrentPageTextTargets(pageNumber: number, scale: number, renderId: number) {
+    if (!pdfProxy || !workspace) {
+      currentPageTextSpans = []
+      selectedTextSpanId = null
+      return
+    }
+
+    const nextTextSpanToken = ++textSpanToken
+
+    try {
+      const spans = await extractPageTextSpans(pdfProxy, pageNumber, scale)
+      if (renderId !== renderToken || nextTextSpanToken !== textSpanToken || pageNumber !== currentPage) {
+        return
+      }
+
+      currentPageTextSpans = spans
+      if (!spans.some((span) => span.id === selectedTextSpanId)) {
+        selectedTextSpanId = null
+      }
+    } catch {
+      if (nextTextSpanToken === textSpanToken) {
+        currentPageTextSpans = []
+        selectedTextSpanId = null
       }
     }
   }
@@ -1687,6 +1770,25 @@
       fontSize,
       alignment: textEditAlignment,
     }
+  }
+
+  function toggleTextTargetMode() {
+    textTargetMode = !textTargetMode
+  }
+
+  function clearSelectedTextTarget() {
+    selectedTextSpanId = null
+  }
+
+  function selectTextTarget(span: PdfPageTextSpan) {
+    selectedTextSpanId = span.id
+    textEditContent = span.text
+    textEditX = span.xPercent.toFixed(2)
+    textEditY = span.yPercent.toFixed(2)
+    textEditWidth = span.widthPercent.toFixed(2)
+    textEditHeight = Math.max(span.heightPercent, 5).toFixed(2)
+    textEditFontSize = Math.round(span.fontSize).toString()
+    textEditAlignment = 'left'
   }
 
   function handlePageDragStart(pageNumber: number, event: DragEvent) {
@@ -1985,7 +2087,41 @@
 
         <div class="inspector-block">
           <span class="meta-label">True Edit</span>
-          <span class="muted">Use top-left percentages to place editable replacement content directly into the PDF.</span>
+          <span class="muted">
+            Use text targeting for existing born-digital content, or manual percentages as the fallback for hard PDFs.
+          </span>
+        </div>
+
+        <div class="inspector-block">
+          <div class="section-head compact-head">
+            <h3>Target Existing Text</h3>
+            <span class="pill">{currentPageTextSpans.length}</span>
+          </div>
+          <span class="muted">Show page text targets, click the text you want, then replace that exact region.</span>
+          <div class="tool-grid">
+            <button data-testid="toggle-text-target-button" on:click={toggleTextTargetMode} disabled={busy || !workspace}>
+              {textTargetMode ? 'Hide Text Targets' : 'Show Text Targets'}
+            </button>
+            <button
+              data-testid="replace-selected-text-button"
+              on:click={replaceSelectedTextTarget}
+              disabled={busy || !workspace || !selectedTextSpan || !textEditContent.trim()}
+            >
+              Replace Selected Text
+            </button>
+          </div>
+          {#if selectedTextSpan}
+            <div class="stack-list attachment-entry">
+              <span>Selected: {selectedTextSpan.text}</span>
+              <span>
+                Region: {selectedTextSpan.xPercent.toFixed(1)}%, {selectedTextSpan.yPercent.toFixed(1)}%,
+                {selectedTextSpan.widthPercent.toFixed(1)}% x {selectedTextSpan.heightPercent.toFixed(1)}%
+              </span>
+              <button class="ghost-button" on:click={clearSelectedTextTarget} disabled={busy}>Clear Selected Text</button>
+            </div>
+          {:else}
+            <span class="muted">No existing page text selected yet.</span>
+          {/if}
         </div>
 
         <label class="field">
@@ -2212,7 +2348,30 @@
 
         {#if workspace}
           <div class="viewer-pane" bind:this={viewerPane}>
-            <canvas bind:this={viewerCanvas}></canvas>
+            <div
+              class="viewer-surface"
+              style:width={renderedPageWidth ? `${renderedPageWidth}px` : undefined}
+              style:height={renderedPageHeight ? `${renderedPageHeight}px` : undefined}
+            >
+              <canvas bind:this={viewerCanvas}></canvas>
+              {#if textTargetMode && currentPageTextSpans.length > 0}
+                <div class="text-target-layer">
+                  {#each currentPageTextSpans as span}
+                    <button
+                      type="button"
+                      class:selected={span.id === selectedTextSpanId}
+                      class="text-target-hitbox"
+                      style:left={`${span.xPercent}%`}
+                      style:top={`${span.yPercent}%`}
+                      style:width={`${span.widthPercent}%`}
+                      style:height={`${Math.max(span.heightPercent, 0.8)}%`}
+                      on:click={() => selectTextTarget(span)}
+                      aria-label={`Target text: ${span.text}`}
+                    ></button>
+                  {/each}
+                </div>
+              {/if}
+            </div>
           </div>
         {:else}
           <div class="empty-state">

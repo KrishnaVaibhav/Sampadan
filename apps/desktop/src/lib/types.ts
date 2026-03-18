@@ -136,6 +136,17 @@ export interface PageThumbnail {
   height: number
 }
 
+export interface PdfPageTextSpan {
+  id: string
+  pageNumber: number
+  text: string
+  xPercent: number
+  yPercent: number
+  widthPercent: number
+  heightPercent: number
+  fontSize: number
+}
+
 export interface OcrStatusPayload {
   available: boolean
   binaryPath: string | null

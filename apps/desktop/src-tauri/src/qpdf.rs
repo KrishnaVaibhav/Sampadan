@@ -3,6 +3,7 @@ use std::{
   env, fs,
   path::{Path, PathBuf},
   process::{Command, Output},
+  sync::atomic::{AtomicU64, Ordering},
   time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -42,6 +43,8 @@ struct ValidatedProtectionOptions {
   allow_extract: bool,
   encrypt_metadata: bool,
 }
+
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub fn probe_qpdf() -> QpdfStatus {
   match resolve_qpdf() {
@@ -332,10 +335,12 @@ fn validate_protection_options(
 }
 
 fn build_temp_stamp() -> u128 {
-  SystemTime::now()
+  let now = SystemTime::now()
     .duration_since(UNIX_EPOCH)
-    .map(|duration| duration.as_millis())
-    .unwrap_or_default()
+    .map(|duration| duration.as_nanos())
+    .unwrap_or_default();
+  let counter = u128::from(TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed));
+  now.saturating_mul(1_000).saturating_add(counter)
 }
 
 fn remove_if_exists(path: &Path) {
