@@ -401,6 +401,9 @@ describe('real PDF workflow actions', () => {
       .mockResolvedValueOnce('C:/docs/workflow-merged-copy.pdf')
       .mockResolvedValueOnce('C:/exports/page.png')
       .mockResolvedValueOnce('C:/exports/document.txt')
+      .mockResolvedValueOnce('C:/exports/document.md')
+      .mockResolvedValueOnce('C:/exports/document.html')
+      .mockResolvedValueOnce('C:/exports/document.docx')
       .mockResolvedValueOnce('C:/exports/trust.json')
 
     const user = userEvent.setup()
@@ -470,6 +473,18 @@ describe('real PDF workflow actions', () => {
       expect(screen.getByText('Placed image stamp on page 2')).toBeTruthy()
     })
 
+    await user.clear(screen.getByLabelText('Edit Text'))
+    await user.type(screen.getByLabelText('Edit Text'), 'Inserted editorial correction')
+    await user.click(screen.getByRole('button', { name: 'Place Text Block' }))
+    await waitFor(() => {
+      expect(screen.getByText('Placed text block on page 2')).toBeTruthy()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Whiteout + Replace' }))
+    await waitFor(() => {
+      expect(screen.getByText('Replaced region on page 2')).toBeTruthy()
+    })
+
     await user.type(screen.getByLabelText('Attachment Description'), 'Release checklist')
     await user.click(screen.getByTestId('attach-file-button'))
     await waitFor(() => {
@@ -529,6 +544,24 @@ describe('real PDF workflow actions', () => {
       expect(saveCalls.length).toBe(16)
     })
 
+    await user.click(screen.getByRole('button', { name: 'Export Markdown' }))
+    await waitFor(() => {
+      const saveCalls = invokeMock.mock.calls.filter(([command]) => command === 'save_file_bytes')
+      expect(saveCalls.length).toBe(17)
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Export HTML' }))
+    await waitFor(() => {
+      const saveCalls = invokeMock.mock.calls.filter(([command]) => command === 'save_file_bytes')
+      expect(saveCalls.length).toBe(18)
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Export DOCX' }))
+    await waitFor(() => {
+      const saveCalls = invokeMock.mock.calls.filter(([command]) => command === 'save_file_bytes')
+      expect(saveCalls.length).toBe(19)
+    })
+
     await user.click(screen.getByRole('button', { name: 'Export Trust Report' }))
 
     await waitFor(() => {
@@ -536,7 +569,7 @@ describe('real PDF workflow actions', () => {
       const saveCalls = invokeMock.mock.calls.filter(([command]) => command === 'save_file_bytes')
 
       expect(inspectCalls.length).toBeGreaterThanOrEqual(13)
-      expect(saveCalls.length).toBe(17)
+      expect(saveCalls.length).toBe(20)
     })
 
     expectCamelCasePayloadKeys(getInvokePayloads('load_file_bytes'), ['path'])
@@ -549,5 +582,5 @@ describe('real PDF workflow actions', () => {
 
     const savedMergedSummary = await readPdfSummary(diskFiles.get('C:/docs/workflow-merged-copy.pdf')!)
     expect(savedMergedSummary.pageCount).toBe(6)
-  })
+  }, 15000)
 })

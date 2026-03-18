@@ -119,12 +119,12 @@ Encrypted-PDF unlock and protected-copy export also route through Rust so passwo
 Current:
 
 - `PDF.js` for viewing and page rendering
-- `pdf-lib` for merge, extract, rotate, and reorder
+- `pdf-lib` for merge, extract, rotate, reorder, and direct page-overlay editing
 
 Planned split:
 
 - `PDF.js`: viewport, text layer, selection, search UI
-- `pdf-lib`: lightweight structural edits
+- `pdf-lib`: lightweight structural edits and positioned page-edit overlays
 - `qpdf`: repair, normalization, encryption, advanced page operations
 - `PDFium`: high-fidelity rendering, printing, thumbnails, difficult PDFs
 - `Tesseract`: OCR pipeline
@@ -221,8 +221,10 @@ These are the modules the codebase should grow into instead of adding more logic
   Current recent-file persistence module
 - `src/lib/viewer/pdf-viewer.ts`
   PDF.js canvas rendering, thumbnails, and text extraction
+- `src/lib/conversion/document-export.ts`
+  local Markdown, HTML, and DOCX generation from extracted PDF text
 - `src/lib/operations/pdf-document.ts`
-  merge, insert, rotate, extract, reorder, split, watermark, image stamping, review notes, embedded attachments, page numbering, metadata, and export helpers
+  merge, insert, rotate, extract, reorder, split, watermark, image stamping, review notes, true page-edit overlays, embedded attachments, page numbering, metadata, and export helpers
 - `src/lib/types.ts`
   shared desktop payloads for trust, OCR, qpdf runtime state, and protected-copy options
 - `src/lib/ocr/ocr-client.ts`
@@ -323,6 +325,8 @@ Status on March 18, 2026:
 - native encryption summary inspection implemented
 - write-side protected-copy export implemented through local qpdf
 - encrypted-PDF unlock into editable workspace implemented through local qpdf
+- true page editing implemented through positioned text-block and whiteout-replace PDF mutations
+- Markdown, HTML, and DOCX conversion/export implemented locally from extracted PDF text
 - detached CMS signature integrity verification implemented through local OpenSSL
 - signer certificate inventory implemented through local OpenSSL
 - local CA-store certificate-chain trust attempts implemented

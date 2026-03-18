@@ -3,6 +3,7 @@ import type { PdfMetadataDraft } from '../types'
 
 export type WatermarkPosition = 'center' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
 export type ReviewNoteTone = 'amber' | 'blue' | 'green' | 'rose'
+export type TextEditAlignment = 'left' | 'center' | 'right'
 export type PageNumberPosition =
   | 'header-left'
   | 'header-center'
@@ -117,6 +118,45 @@ function resolvePageNumberPosition(options: {
     x: (options.pageWidth - options.textWidth) / 2,
     y,
   }
+}
+
+function resolveRelativeEditRect(options: {
+  pageWidth: number
+  pageHeight: number
+  xPercent: number
+  yPercent: number
+  widthPercent: number
+  heightPercent: number
+}) {
+  const width = clampNumber(options.pageWidth * (options.widthPercent / 100), 48, options.pageWidth)
+  const height = clampNumber(options.pageHeight * (options.heightPercent / 100), 28, options.pageHeight)
+  const topX = clampNumber(options.pageWidth * (options.xPercent / 100), 0, Math.max(0, options.pageWidth - width))
+  const topY = clampNumber(options.pageHeight * (options.yPercent / 100), 0, Math.max(0, options.pageHeight - height))
+
+  return {
+    x: topX,
+    y: options.pageHeight - topY - height,
+    width,
+    height,
+  }
+}
+
+function resolveAlignedTextX(options: {
+  rectX: number
+  rectWidth: number
+  padding: number
+  textWidth: number
+  alignment: TextEditAlignment
+}) {
+  if (options.alignment === 'center') {
+    return options.rectX + (options.rectWidth - options.textWidth) / 2
+  }
+
+  if (options.alignment === 'right') {
+    return options.rectX + options.rectWidth - options.padding - options.textWidth
+  }
+
+  return options.rectX + options.padding
 }
 
 export async function mergeDocuments(buffers: Uint8Array[]) {
@@ -311,6 +351,159 @@ export async function addTextWatermarkToDocument(
       font,
       color: rgb(0.73, 0.77, 0.84),
     })
+  }
+
+  return saveDocument(document)
+}
+
+export async function addFreeTextBlockToDocument(
+  bytes: Uint8Array,
+  options: {
+    text: string
+    pageIndexes: number[]
+    xPercent: number
+    yPercent: number
+    widthPercent: number
+    heightPercent: number
+    fontSize: number
+    alignment: TextEditAlignment
+    paperBacking: boolean
+  },
+) {
+  const { StandardFonts, rgb } = await getPdfLib()
+  const document = await loadDocument(bytes)
+  const font = await document.embedFont(StandardFonts.Helvetica)
+  const text = options.text.trim()
+
+  if (!text) {
+    throw new Error('Enter text before placing a text block.')
+  }
+
+  const pageIndexes = normalizePageIndexes(options.pageIndexes, document.getPageCount())
+  const fontSize = clampNumber(options.fontSize, 8, 72)
+
+  for (const pageIndex of pageIndexes) {
+    const page = document.getPage(pageIndex)
+    const { width, height } = page.getSize()
+    const rect = resolveRelativeEditRect({
+      pageWidth: width,
+      pageHeight: height,
+      xPercent: options.xPercent,
+      yPercent: options.yPercent,
+      widthPercent: options.widthPercent,
+      heightPercent: options.heightPercent,
+    })
+    const padding = clampNumber(Math.min(rect.width, rect.height) * 0.08, 8, 16)
+    const maxTextWidth = Math.max(36, rect.width - padding * 2)
+    const lineHeight = fontSize * 1.24
+    const maxLines = Math.max(1, Math.floor((rect.height - padding * 2 + fontSize * 0.2) / lineHeight))
+    const lines = wrapTextToWidth(text, font, fontSize, maxTextWidth, maxLines)
+
+    if (options.paperBacking) {
+      page.drawRectangle({
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+        color: rgb(0.99, 0.99, 0.98),
+        opacity: 0.94,
+        borderColor: rgb(0.77, 0.8, 0.84),
+        borderWidth: 0.8,
+        borderOpacity: 0.95,
+      })
+    }
+
+    for (const [lineIndex, line] of lines.entries()) {
+      const textWidth = font.widthOfTextAtSize(line, fontSize)
+      page.drawText(line, {
+        x: resolveAlignedTextX({
+          rectX: rect.x,
+          rectWidth: rect.width,
+          padding,
+          textWidth,
+          alignment: options.alignment,
+        }),
+        y: rect.y + rect.height - padding - fontSize - lineIndex * lineHeight,
+        size: fontSize,
+        font,
+        color: rgb(0.12, 0.14, 0.18),
+      })
+    }
+  }
+
+  return saveDocument(document)
+}
+
+export async function replaceRegionWithTextInDocument(
+  bytes: Uint8Array,
+  options: {
+    text: string
+    pageIndexes: number[]
+    xPercent: number
+    yPercent: number
+    widthPercent: number
+    heightPercent: number
+    fontSize: number
+    alignment: TextEditAlignment
+  },
+) {
+  const { StandardFonts, rgb } = await getPdfLib()
+  const document = await loadDocument(bytes)
+  const font = await document.embedFont(StandardFonts.Helvetica)
+  const text = options.text.trim()
+  const pageIndexes = normalizePageIndexes(options.pageIndexes, document.getPageCount())
+  const fontSize = clampNumber(options.fontSize, 8, 72)
+
+  for (const pageIndex of pageIndexes) {
+    const page = document.getPage(pageIndex)
+    const { width, height } = page.getSize()
+    const rect = resolveRelativeEditRect({
+      pageWidth: width,
+      pageHeight: height,
+      xPercent: options.xPercent,
+      yPercent: options.yPercent,
+      widthPercent: options.widthPercent,
+      heightPercent: options.heightPercent,
+    })
+    const padding = clampNumber(Math.min(rect.width, rect.height) * 0.08, 8, 16)
+
+    page.drawRectangle({
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+      color: rgb(1, 1, 1),
+      opacity: 1,
+      borderColor: rgb(0.86, 0.88, 0.91),
+      borderWidth: 0.6,
+      borderOpacity: 0.85,
+    })
+
+    if (!text) {
+      continue
+    }
+
+    const maxTextWidth = Math.max(36, rect.width - padding * 2)
+    const lineHeight = fontSize * 1.24
+    const maxLines = Math.max(1, Math.floor((rect.height - padding * 2 + fontSize * 0.2) / lineHeight))
+    const lines = wrapTextToWidth(text, font, fontSize, maxTextWidth, maxLines)
+
+    for (const [lineIndex, line] of lines.entries()) {
+      const textWidth = font.widthOfTextAtSize(line, fontSize)
+      page.drawText(line, {
+        x: resolveAlignedTextX({
+          rectX: rect.x,
+          rectWidth: rect.width,
+          padding,
+          textWidth,
+          alignment: options.alignment,
+        }),
+        y: rect.y + rect.height - padding - fontSize - lineIndex * lineHeight,
+        size: fontSize,
+        font,
+        color: rgb(0.08, 0.1, 0.12),
+      })
+    }
   }
 
   return saveDocument(document)

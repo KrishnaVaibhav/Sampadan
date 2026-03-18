@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest'
 import { createSamplePdf, readPdfSummary } from '../../test/pdf-fixtures'
 import {
   addAttachmentToDocument,
+  addFreeTextBlockToDocument,
   addPageNumbersToDocument,
   addImageStampToDocument,
   addReviewNoteToDocument,
@@ -16,6 +17,7 @@ import {
   mergeDocuments,
   movePageInDocument,
   readMetadataFromDocument,
+  replaceRegionWithTextInDocument,
   rotatePageInDocument,
   splitDocumentIntoSinglePages,
 } from './pdf-document'
@@ -192,5 +194,37 @@ describe('real PDF document operations', () => {
     const text = await readPdfText(noted)
     expect(text).toContain('Page Review')
     expect(text).toContain('Follow up on alignment')
+  })
+
+  test('positioned text blocks and whiteout replacement write readable edit content', async () => {
+    const source = await createSamplePdf(2)
+
+    const withTextBlock = await addFreeTextBlockToDocument(source, {
+      text: 'Edited headline for page one',
+      pageIndexes: [0],
+      xPercent: 12,
+      yPercent: 14,
+      widthPercent: 46,
+      heightPercent: 16,
+      fontSize: 18,
+      alignment: 'left',
+      paperBacking: true,
+    })
+
+    const replaced = await replaceRegionWithTextInDocument(withTextBlock, {
+      text: 'Replacement body copy',
+      pageIndexes: [1],
+      xPercent: 18,
+      yPercent: 22,
+      widthPercent: 42,
+      heightPercent: 18,
+      fontSize: 16,
+      alignment: 'center',
+    })
+
+    expect((await readPdfSummary(replaced)).pageCount).toBe(2)
+    const text = await readPdfText(replaced)
+    expect(text).toContain('Edited headline for page one')
+    expect(text).toContain('Replacement body copy')
   })
 })

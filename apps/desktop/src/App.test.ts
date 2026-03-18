@@ -49,6 +49,7 @@ vi.mock('./lib/viewer/pdf-viewer', () => ({
     { pageNumber: 2, dataUrl: 'data:image/jpeg;base64,ZmFrZQ==', width: 120, height: 160 },
     { pageNumber: 3, dataUrl: 'data:image/jpeg;base64,ZmFrZQ==', width: 120, height: 160 },
   ]),
+  extractDocumentTextPages: vi.fn(async () => ['Page 1 text', 'Page 2 text', 'Page 3 text']),
   extractDocumentText: vi.fn(async () => 'Document text'),
 }))
 
@@ -56,6 +57,7 @@ vi.mock('./lib/operations/pdf-document', () => ({
   mergeDocuments: vi.fn(async () => Uint8Array.from([9, 9, 9, 9])),
   insertDocumentAfterPage: vi.fn(async () => Uint8Array.from([8, 8, 8, 8])),
   addAttachmentToDocument: vi.fn(async () => Uint8Array.from([4, 4, 4, 4])),
+  addFreeTextBlockToDocument: vi.fn(async () => Uint8Array.from([3, 3, 3, 3])),
   addImageStampToDocument: vi.fn(async () => Uint8Array.from([6, 6, 6])),
   addReviewNoteToDocument: vi.fn(async () => Uint8Array.from([7, 7, 7])),
   rotatePageInDocument: vi.fn(async () => Uint8Array.from([1, 2, 3])),
@@ -67,6 +69,7 @@ vi.mock('./lib/operations/pdf-document', () => ({
   splitDocumentIntoSinglePages: vi.fn(async () => [Uint8Array.from([1]), Uint8Array.from([2])]),
   addTextWatermarkToDocument: vi.fn(async () => Uint8Array.from([4, 4, 4])),
   addPageNumbersToDocument: vi.fn(async () => Uint8Array.from([5, 5, 5])),
+  replaceRegionWithTextInDocument: vi.fn(async () => Uint8Array.from([2, 2, 2, 2])),
   readMetadataFromDocument: vi.fn(async () => ({
     title: 'Sample PDF',
     author: 'Krishna Vaibhav',
@@ -318,6 +321,9 @@ describe('Sampadan desktop app regression suite', () => {
       'Delete Page',
       'Blank After',
       'All Pages PNG',
+      'Export Markdown',
+      'Export HTML',
+      'Export DOCX',
       'Next',
       'Fit Width',
       'Rotate Left',
@@ -328,6 +334,8 @@ describe('Sampadan desktop app regression suite', () => {
       'Apply Watermark',
       'Place Image Stamp',
       'Add Review Note',
+      'Place Text Block',
+      'Whiteout + Replace',
       'Add Page Numbers',
       'Save Protected Copy',
     ]) {
@@ -671,6 +679,9 @@ describe('Sampadan desktop app regression suite', () => {
     saveDialogMock
       .mockResolvedValueOnce('C:/exports/sample-page-001.png')
       .mockResolvedValueOnce('C:/exports/sample.txt')
+      .mockResolvedValueOnce('C:/exports/sample.md')
+      .mockResolvedValueOnce('C:/exports/sample.html')
+      .mockResolvedValueOnce('C:/exports/sample.docx')
 
     const user = userEvent.setup()
     render(App)
@@ -698,10 +709,17 @@ describe('Sampadan desktop app regression suite', () => {
     await user.click(screen.getByRole('button', { name: 'Place Image Stamp' }))
     await user.type(screen.getByLabelText('Note Text'), 'Check alignment on page 2.')
     await user.click(screen.getByRole('button', { name: 'Add Review Note' }))
+    await user.clear(screen.getByLabelText('Edit Text'))
+    await user.type(screen.getByLabelText('Edit Text'), 'Edited paragraph for page 2.')
+    await user.click(screen.getByRole('button', { name: 'Place Text Block' }))
+    await user.click(screen.getByRole('button', { name: 'Whiteout + Replace' }))
     await user.click(screen.getByRole('button', { name: 'Add Page Numbers' }))
 
     await user.click(screen.getByRole('button', { name: 'Export PNG' }))
     await user.click(screen.getByRole('button', { name: 'Export Text' }))
+    await user.click(screen.getByRole('button', { name: 'Export Markdown' }))
+    await user.click(screen.getByRole('button', { name: 'Export HTML' }))
+    await user.click(screen.getByRole('button', { name: 'Export DOCX' }))
     await user.click(screen.getByRole('button', { name: 'All Pages PNG' }))
     await user.click(screen.getByRole('button', { name: 'Split To Folder' }))
 

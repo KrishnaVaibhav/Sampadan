@@ -71,7 +71,7 @@ export async function generatePageThumbnails(
   return thumbnails
 }
 
-export async function extractDocumentText(pdfProxy: PdfProxy): Promise<string> {
+export async function extractDocumentTextPages(pdfProxy: PdfProxy): Promise<string[]> {
   const pages: string[] = []
 
   for (let pageNumber = 1; pageNumber <= pdfProxy.numPages; pageNumber += 1) {
@@ -94,8 +94,13 @@ export async function extractDocumentText(pdfProxy: PdfProxy): Promise<string> {
       .replace(/\n{3,}/g, '\n\n')
       .trim()
 
-    pages.push(`Page ${pageNumber}\n${normalized}`)
+    pages.push(normalized)
   }
 
-  return pages.join('\n\n')
+  return pages
+}
+
+export async function extractDocumentText(pdfProxy: PdfProxy): Promise<string> {
+  const pages = await extractDocumentTextPages(pdfProxy)
+  return pages.map((text, index) => `Page ${index + 1}\n${text}`).join('\n\n')
 }

@@ -16,9 +16,9 @@ This package contains the local-first desktop application for Sampadan.
 - viewer-first workspace with the PDF canvas as the dominant surface
 - rotate, reorder, duplicate, delete, and insert blank pages
 - extract page ranges and split documents into single-page files
-- add text watermarks, image stamps, review notes, and page numbers
+- add text watermarks, image stamps, review notes, free text blocks, whiteout-and-replace edits, and page numbers
 - embed local attachment files into PDFs and export embedded attachments
-- export page PNGs and document text
+- export page PNGs, document text, Markdown, HTML, and DOCX
 - edit PDF metadata
 - unlock encrypted PDFs into a normal editable workspace through local `qpdf`
 - save password-protected PDF copies through local `qpdf`

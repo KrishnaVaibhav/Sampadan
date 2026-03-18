@@ -4,9 +4,15 @@
   import { onMount, tick } from 'svelte'
 
   import { fetchOcrStatus, runOcrForBlob, runOcrPdfForBlob } from './lib/ocr/ocr-client'
+  import {
+    buildDocxExport,
+    buildHtmlExport,
+    buildMarkdownExport,
+  } from './lib/conversion/document-export'
   import { type PdfProxy, loadPdfProxy } from './lib/pdf-engine'
   import {
     addAttachmentToDocument,
+    addFreeTextBlockToDocument,
     addReviewNoteToDocument,
     addPageNumbersToDocument,
     addImageStampToDocument,
@@ -20,12 +26,14 @@
     mergeDocuments,
     movePageInDocument,
     readMetadataFromDocument,
+    replaceRegionWithTextInDocument,
     rotatePageInDocument,
     splitDocumentIntoSinglePages,
   } from './lib/operations/pdf-document'
   import type {
     PageNumberPosition,
     ReviewNoteTone,
+    TextEditAlignment,
     WatermarkPosition,
   } from './lib/operations/pdf-document'
   import {
@@ -56,7 +64,12 @@
     QpdfStatusPayload,
     WorkspaceDocument,
   } from './lib/types'
-  import { extractDocumentText, generatePageThumbnails, renderPdfPageToCanvas } from './lib/viewer/pdf-viewer'
+  import {
+    extractDocumentText,
+    extractDocumentTextPages,
+    generatePageThumbnails,
+    renderPdfPageToCanvas,
+  } from './lib/viewer/pdf-viewer'
 
   const emptyFlags: PdfFlags = {
     encrypted: false,
@@ -109,6 +122,12 @@
     { value: 'rose', label: 'Rose' },
   ]
 
+  const textEditAlignmentOptions: Array<{ value: TextEditAlignment; label: string }> = [
+    { value: 'left', label: 'Left' },
+    { value: 'center', label: 'Center' },
+    { value: 'right', label: 'Right' },
+  ]
+
   const protectionPrintOptions: Array<{ value: PdfProtectionPrintAccess; label: string }> = [
     { value: 'full', label: 'Full printing' },
     { value: 'low', label: 'Low-res printing' },
@@ -159,6 +178,14 @@
   let reviewNoteTone: ReviewNoteTone = 'amber'
   let pageNumberStart = '1'
   let pageNumberPosition: PageNumberPosition = 'footer-center'
+  let textEditContent = 'Edited text'
+  let textEditX = '12'
+  let textEditY = '14'
+  let textEditWidth = '46'
+  let textEditHeight = '16'
+  let textEditFontSize = '16'
+  let textEditAlignment: TextEditAlignment = 'left'
+  let textEditPaperBacking = true
   let dragSourcePage: number | null = null
   let dropTargetPage: number | null = null
   let ocrStatus: OcrStatusPayload | null = null
@@ -656,6 +683,86 @@
       status = `Exported ${fileNameFromPath(targetPath)}`
     } catch (error) {
       reportError(error, 'Failed to export document text')
+    } finally {
+      busy = false
+    }
+  }
+
+  async function exportDocumentMarkdown() {
+    await exportConvertedDocument({
+      formatLabel: 'Markdown',
+      extension: 'md',
+      workingStatus: 'Converting PDF text to Markdown',
+      cancelStatus: 'Markdown export cancelled',
+      errorStatus: 'Failed to export Markdown',
+      saveFilterName: 'Markdown file',
+      buildBytes: (pages) => buildMarkdownExport(workspace!.fileName, pages),
+    })
+  }
+
+  async function exportDocumentHtml() {
+    await exportConvertedDocument({
+      formatLabel: 'HTML',
+      extension: 'html',
+      workingStatus: 'Converting PDF text to HTML',
+      cancelStatus: 'HTML export cancelled',
+      errorStatus: 'Failed to export HTML',
+      saveFilterName: 'HTML file',
+      buildBytes: (pages) => buildHtmlExport(workspace!.fileName, pages),
+    })
+  }
+
+  async function exportDocumentDocx() {
+    await exportConvertedDocument({
+      formatLabel: 'DOCX',
+      extension: 'docx',
+      workingStatus: 'Converting PDF text to DOCX',
+      cancelStatus: 'DOCX export cancelled',
+      errorStatus: 'Failed to export DOCX',
+      saveFilterName: 'Word document',
+      buildBytes: (pages) => buildDocxExport(workspace!.fileName, pages),
+    })
+  }
+
+  async function exportConvertedDocument(options: {
+    formatLabel: string
+    extension: string
+    workingStatus: string
+    cancelStatus: string
+    errorStatus: string
+    saveFilterName: string
+    buildBytes: (pages: string[]) => Uint8Array | Promise<Uint8Array>
+  }) {
+    if (!workspace || !pdfProxy || busy) return
+
+    busy = true
+    statusTone = 'busy'
+    status = options.workingStatus
+    lastError = null
+
+    try {
+      const pages = await extractDocumentTextPages(pdfProxy)
+      const targetPath = await saveDialog({
+        defaultPath: withExtension(workspace.fileName, options.extension),
+        filters: [{ name: options.saveFilterName, extensions: [options.extension] }],
+      })
+
+      if (!targetPath) {
+        statusTone = 'idle'
+        status = options.cancelStatus
+        return
+      }
+
+      const bytes = await options.buildBytes(pages)
+      await invoke('save_file_bytes', {
+        path: targetPath,
+        bytesBase64: bytesToBase64(bytes),
+      })
+
+      statusTone = 'idle'
+      status = `Exported ${fileNameFromPath(targetPath)}`
+    } catch (error) {
+      reportError(error, options.errorStatus)
     } finally {
       busy = false
     }
@@ -1221,6 +1328,65 @@
     })
   }
 
+  async function placeTextBlock() {
+    if (!workspace || busy) return
+
+    const text = textEditContent.trim()
+    if (!text) {
+      reportError(new Error('Enter text before placing a text block.'), 'Edit text is required')
+      return
+    }
+
+    const layout = resolveTextEditLayout()
+    if (!layout) {
+      return
+    }
+
+    const currentWorkspace = workspace
+    const pageIndexes = resolveEditPageIndexes(currentWorkspace)
+    const scopeLabel = formatEditScopeLabel(currentWorkspace)
+
+    await runDocumentMutation({
+      workingStatus: `Placing text block on ${scopeLabel}`,
+      successStatus: `Placed text block on ${scopeLabel}`,
+      errorStatus: 'Failed to place the text block',
+      nextCurrentPage: currentPage,
+      mutate: () =>
+        addFreeTextBlockToDocument(currentWorkspace.bytes, {
+          text,
+          pageIndexes,
+          ...layout,
+          paperBacking: textEditPaperBacking,
+        }),
+    })
+  }
+
+  async function whiteoutAndReplace() {
+    if (!workspace || busy) return
+
+    const layout = resolveTextEditLayout()
+    if (!layout) {
+      return
+    }
+
+    const currentWorkspace = workspace
+    const pageIndexes = resolveEditPageIndexes(currentWorkspace)
+    const scopeLabel = formatEditScopeLabel(currentWorkspace)
+
+    await runDocumentMutation({
+      workingStatus: `Replacing region on ${scopeLabel}`,
+      successStatus: `Replaced region on ${scopeLabel}`,
+      errorStatus: 'Failed to replace the selected region',
+      nextCurrentPage: currentPage,
+      mutate: () =>
+        replaceRegionWithTextInDocument(currentWorkspace.bytes, {
+          text: textEditContent,
+          pageIndexes,
+          ...layout,
+        }),
+    })
+  }
+
   async function runDocumentMutation(options: {
     workingStatus: string
     successStatus: string
@@ -1477,6 +1643,52 @@
     return parsed
   }
 
+  function parseBoundedNumber(
+    value: string | number,
+    fieldLabel: string,
+    min: number,
+    max: number,
+  ) {
+    const parsed = typeof value === 'number' ? value : Number.parseFloat(value)
+
+    if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+      reportError(
+        new Error(`${fieldLabel} must be between ${min} and ${max}.`),
+        `Invalid ${fieldLabel.toLowerCase()}`,
+      )
+      return null
+    }
+
+    return parsed
+  }
+
+  function resolveTextEditLayout() {
+    const xPercent = parseBoundedNumber(textEditX, 'Edit X', 0, 95)
+    const yPercent = parseBoundedNumber(textEditY, 'Edit Y', 0, 95)
+    const widthPercent = parseBoundedNumber(textEditWidth, 'Edit width', 5, 100)
+    const heightPercent = parseBoundedNumber(textEditHeight, 'Edit height', 5, 100)
+    const fontSize = parseBoundedNumber(textEditFontSize, 'Edit font size', 8, 72)
+
+    if (
+      xPercent === null ||
+      yPercent === null ||
+      widthPercent === null ||
+      heightPercent === null ||
+      fontSize === null
+    ) {
+      return null
+    }
+
+    return {
+      xPercent,
+      yPercent,
+      widthPercent,
+      heightPercent,
+      fontSize,
+      alignment: textEditAlignment,
+    }
+  }
+
   function handlePageDragStart(pageNumber: number, event: DragEvent) {
     dragSourcePage = pageNumber
     dropTargetPage = null
@@ -1652,7 +1864,6 @@
         <button on:click={mergeAdditionalPdfs} disabled={busy}>Merge PDFs</button>
         <button data-testid="save-pdf-button" on:click={() => saveWorkspace(false)} disabled={busy || !workspace}>Save</button>
         <button on:click={() => saveWorkspace(true)} disabled={busy || !workspace}>Save As</button>
-        <button on:click={exportDocumentTextToFile} disabled={busy || !workspace}>Export Text</button>
         <button on:click={exportTrustReport} disabled={busy || !workspace}>Export Trust Report</button>
       </div>
     </section>
@@ -1684,9 +1895,25 @@
       </div>
     </details>
 
+    <details class="card dock-panel convert-panel" open={Boolean(workspace)}>
+      <summary class="dock-summary">
+        <span>Convert</span>
+        <small>{workspace ? 'Ready' : 'Idle'}</small>
+      </summary>
+      <div class="dock-body">
+        <p class="muted panel-note">Generate local text-first exports from the current PDF session.</p>
+        <div class="tool-grid">
+          <button on:click={exportDocumentTextToFile} disabled={busy || !workspace}>Export Text</button>
+          <button on:click={exportDocumentMarkdown} disabled={busy || !workspace}>Export Markdown</button>
+          <button on:click={exportDocumentHtml} disabled={busy || !workspace}>Export HTML</button>
+          <button on:click={exportDocumentDocx} disabled={busy || !workspace}>Export DOCX</button>
+        </div>
+      </div>
+    </details>
+
     <details class="card dock-panel" open>
       <summary class="dock-summary">
-        <span>Overlay Edit</span>
+        <span>Page Edit</span>
         <small>{workspace ? (editScope === 'all' ? 'All pages' : `Page ${currentPage}`) : 'Idle'}</small>
       </summary>
       <div class="dock-body">
@@ -1755,6 +1982,90 @@
         <button data-testid="review-note-button" on:click={addReviewNote} disabled={busy || !workspace || !reviewNoteBody.trim()}>
           Add Review Note
         </button>
+
+        <div class="inspector-block">
+          <span class="meta-label">True Edit</span>
+          <span class="muted">Use top-left percentages to place editable replacement content directly into the PDF.</span>
+        </div>
+
+        <label class="field">
+          <span class="field-label">Edit Text</span>
+          <textarea
+            class="field-input note-body"
+            bind:value={textEditContent}
+            disabled={!workspace || busy}
+            placeholder="Type replacement or inserted text here."
+          ></textarea>
+        </label>
+
+        <div class="field-grid">
+          <label class="field">
+            <span class="field-label">X %</span>
+            <input class="field-input" bind:value={textEditX} type="number" min="0" max="95" step="1" disabled={!workspace || busy} />
+          </label>
+          <label class="field">
+            <span class="field-label">Y %</span>
+            <input class="field-input" bind:value={textEditY} type="number" min="0" max="95" step="1" disabled={!workspace || busy} />
+          </label>
+          <label class="field">
+            <span class="field-label">Width %</span>
+            <input
+              class="field-input"
+              bind:value={textEditWidth}
+              type="number"
+              min="5"
+              max="100"
+              step="1"
+              disabled={!workspace || busy}
+            />
+          </label>
+          <label class="field">
+            <span class="field-label">Height %</span>
+            <input
+              class="field-input"
+              bind:value={textEditHeight}
+              type="number"
+              min="5"
+              max="100"
+              step="1"
+              disabled={!workspace || busy}
+            />
+          </label>
+          <label class="field">
+            <span class="field-label">Font Size</span>
+            <input
+              class="field-input"
+              bind:value={textEditFontSize}
+              type="number"
+              min="8"
+              max="72"
+              step="1"
+              disabled={!workspace || busy}
+            />
+          </label>
+          <label class="field">
+            <span class="field-label">Alignment</span>
+            <select class="field-input" bind:value={textEditAlignment} disabled={!workspace || busy}>
+              {#each textEditAlignmentOptions as option}
+                <option value={option.value}>{option.label}</option>
+              {/each}
+            </select>
+          </label>
+        </div>
+
+        <label class="check-field">
+          <input class="check-input" type="checkbox" bind:checked={textEditPaperBacking} disabled={!workspace || busy} />
+          <span>Paper backing for inserted text</span>
+        </label>
+
+        <div class="tool-grid">
+          <button data-testid="text-block-button" on:click={placeTextBlock} disabled={busy || !workspace || !textEditContent.trim()}>
+            Place Text Block
+          </button>
+          <button data-testid="replace-region-button" on:click={whiteoutAndReplace} disabled={busy || !workspace}>
+            Whiteout + Replace
+          </button>
+        </div>
 
         <label class="field">
           <span class="field-label">Starting Number</span>
