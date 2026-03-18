@@ -315,6 +315,44 @@ export async function addTextWatermarkToDocument(
   return saveDocument(document)
 }
 
+export async function addImageStampToDocument(
+  bytes: Uint8Array,
+  imageBytes: Uint8Array,
+  options: {
+    pageIndexes: number[]
+    position: WatermarkPosition
+  },
+) {
+  const document = await loadDocument(bytes)
+  const pageIndexes = normalizePageIndexes(options.pageIndexes, document.getPageCount())
+  const image = await embedSupportedImage(document, imageBytes)
+
+  for (const pageIndex of pageIndexes) {
+    const page = document.getPage(pageIndex)
+    const { width, height } = page.getSize()
+    const maxWidth = width * 0.26
+    const maxHeight = height * 0.18
+    const scale = Math.min(maxWidth / image.width, maxHeight / image.height, 1)
+    const dimensions = image.scale(scale)
+    const position = resolveOverlayPosition({
+      pageWidth: width,
+      pageHeight: height,
+      textWidth: dimensions.width,
+      textHeight: dimensions.height,
+      position: options.position,
+    })
+
+    page.drawImage(image, {
+      x: position.x,
+      y: position.y,
+      width: dimensions.width,
+      height: dimensions.height,
+    })
+  }
+
+  return saveDocument(document)
+}
+
 export async function addPageNumbersToDocument(
   bytes: Uint8Array,
   options: {
@@ -353,6 +391,39 @@ export async function addPageNumbersToDocument(
   }
 
   return saveDocument(document)
+}
+
+async function embedSupportedImage(
+  document: Awaited<ReturnType<typeof loadDocument>>,
+  bytes: Uint8Array,
+) {
+  if (isPng(bytes)) {
+    return document.embedPng(bytes)
+  }
+
+  if (isJpeg(bytes)) {
+    return document.embedJpg(bytes)
+  }
+
+  throw new Error('Only PNG and JPEG image stamps are supported right now.')
+}
+
+function isPng(bytes: Uint8Array) {
+  return (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  )
+}
+
+function isJpeg(bytes: Uint8Array) {
+  return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
 }
 
 function normalizeKeywordsForDraft(value: string | string[] | undefined) {

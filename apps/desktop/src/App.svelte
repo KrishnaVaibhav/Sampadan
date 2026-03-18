@@ -7,6 +7,7 @@
   import { type PdfProxy, loadPdfProxy } from './lib/pdf-engine'
   import {
     addPageNumbersToDocument,
+    addImageStampToDocument,
     addTextWatermarkToDocument,
     applyMetadataToDocument,
     deletePageFromDocument,
@@ -36,6 +37,7 @@
   import { loadRecentPaths, rememberRecentPath } from './lib/session/recent-files'
   import type {
     ExtractedPdfAttachmentPayload,
+    LoadedFileBytesPayload,
     LoadedPdfPayload,
     OcrStatusPayload,
     PageThumbnail,
@@ -665,6 +667,47 @@
       status = `Exported ${attachments.length} attachment${attachments.length === 1 ? '' : 's'}`
     } catch (error) {
       reportError(error, 'Failed to export embedded attachments')
+    } finally {
+      busy = false
+    }
+  }
+
+  async function placeImageStamp() {
+    if (!workspace || busy) return
+
+    const selection = await openDialog({
+      multiple: false,
+      filters: [{ name: 'Image files', extensions: ['png', 'jpg', 'jpeg'] }],
+    })
+    const [path] = normalizeSelection(selection)
+    if (!path) return
+
+    const currentWorkspace = workspace
+    const pageIndexes = resolveEditPageIndexes(currentWorkspace)
+    const scopeLabel = formatEditScopeLabel(currentWorkspace)
+
+    busy = true
+    statusTone = 'busy'
+    status = `Placing image stamp on ${scopeLabel}`
+    lastError = null
+
+    try {
+      const imageFile = await invoke<LoadedFileBytesPayload>('load_file_bytes', { path })
+      const imageBytes = base64ToBytes(imageFile.bytesBase64)
+      const nextBytes = await addImageStampToDocument(currentWorkspace.bytes, imageBytes, {
+        pageIndexes,
+        position: watermarkPosition,
+      })
+
+      await commitGeneratedPdf(nextBytes, {
+        fileName: currentWorkspace.fileName,
+        current: currentPage,
+      })
+
+      statusTone = 'idle'
+      status = `Placed image stamp on ${scopeLabel}`
+    } catch (error) {
+      reportError(error, 'Failed to place the image stamp')
     } finally {
       busy = false
     }
@@ -1362,6 +1405,9 @@
         </label>
         <button data-testid="watermark-button" on:click={applyWatermark} disabled={busy || !workspace || !watermarkText.trim()}>
           Apply Watermark
+        </button>
+        <button data-testid="image-stamp-button" on:click={placeImageStamp} disabled={busy || !workspace}>
+          Place Image Stamp
         </button>
 
         <label class="field">

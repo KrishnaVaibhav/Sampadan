@@ -103,6 +103,11 @@ export interface LoadedPdfPayload {
   trustReport: PdfTrustReport
 }
 
+export interface LoadedFileBytesPayload {
+  fileName: string
+  bytesBase64: string
+}
+
 export interface PdfMetadataDraft {
   title: string
   author: string

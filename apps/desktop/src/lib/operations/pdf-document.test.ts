@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest'
 import { createSamplePdf, readPdfSummary } from '../../test/pdf-fixtures'
 import {
   addPageNumbersToDocument,
+  addImageStampToDocument,
   addTextWatermarkToDocument,
   applyMetadataToDocument,
   deletePageFromDocument,
@@ -16,6 +17,11 @@ import {
   rotatePageInDocument,
   splitDocumentIntoSinglePages,
 } from './pdf-document'
+
+const tinyPngBytes = Uint8Array.from(
+  atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg=='),
+  (character) => character.charCodeAt(0),
+)
 
 async function readPdfText(bytes: Uint8Array) {
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
@@ -118,5 +124,17 @@ describe('real PDF document operations', () => {
     expect(text).toContain('10')
     expect(text).toContain('11')
     expect(text).toContain('12')
+  })
+
+  test('image stamping preserves page count and produces a readable PDF', async () => {
+    const source = await createSamplePdf(2)
+
+    const stamped = await addImageStampToDocument(source, tinyPngBytes, {
+      pageIndexes: [0, 1],
+      position: 'bottom-right',
+    })
+
+    expect((await readPdfSummary(stamped)).pageCount).toBe(2)
+    expect(stamped.length).toBeGreaterThan(source.length)
   })
 })

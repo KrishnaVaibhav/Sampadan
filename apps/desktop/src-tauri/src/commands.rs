@@ -33,6 +33,13 @@ pub struct OcrPdfResult {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct LoadedFileBytes {
+  file_name: String,
+  bytes_base64: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExtractedPdfAttachment {
   file_name: String,
   description: Option<String>,
@@ -60,6 +67,22 @@ pub fn inspect_pdf_bytes(
     .map_err(|error| format!("Failed to decode document bytes: {error}"))?;
 
   Ok(build_loaded_pdf(None, file_name, bytes))
+}
+
+#[tauri::command]
+pub fn load_file_bytes(path: String) -> Result<LoadedFileBytes, String> {
+  let path_buf = PathBuf::from(&path);
+  let bytes = fs::read(&path_buf)
+    .map_err(|error| format!("Failed to read file at {}: {error}", path_buf.display()))?;
+
+  Ok(LoadedFileBytes {
+    file_name: path_buf
+      .file_name()
+      .and_then(|candidate| candidate.to_str())
+      .unwrap_or("asset.bin")
+      .to_string(),
+    bytes_base64: STANDARD.encode(bytes),
+  })
 }
 
 #[tauri::command]

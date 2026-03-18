@@ -55,6 +55,7 @@ vi.mock('./lib/viewer/pdf-viewer', () => ({
 vi.mock('./lib/operations/pdf-document', () => ({
   mergeDocuments: vi.fn(async () => Uint8Array.from([9, 9, 9, 9])),
   insertDocumentAfterPage: vi.fn(async () => Uint8Array.from([8, 8, 8, 8])),
+  addImageStampToDocument: vi.fn(async () => Uint8Array.from([6, 6, 6])),
   rotatePageInDocument: vi.fn(async () => Uint8Array.from([1, 2, 3])),
   movePageInDocument: vi.fn(async () => Uint8Array.from([1, 2, 3])),
   extractPagesFromDocument: vi.fn(async () => Uint8Array.from([1, 2, 3])),
@@ -214,6 +215,11 @@ beforeEach(() => {
         }
       case 'load_pdf':
         return createPayload()
+      case 'load_file_bytes':
+        return {
+          fileName: 'stamp.png',
+          bytesBase64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==',
+        }
       case 'save_file_bytes':
         return null
       case 'extract_pdf_attachments':
@@ -289,6 +295,7 @@ describe('Sampadan desktop app regression suite', () => {
       'Extract Page',
       'Export PNG',
       'Apply Watermark',
+      'Place Image Stamp',
       'Add Page Numbers',
     ]) {
       expect((screen.getByRole('button', { name: label }) as HTMLButtonElement).disabled).toBe(false)
@@ -454,6 +461,7 @@ describe('Sampadan desktop app regression suite', () => {
     openDialogMock
       .mockResolvedValueOnce('C:/docs/sample.pdf')
       .mockResolvedValueOnce('C:/docs/insert-source.pdf')
+      .mockResolvedValueOnce('C:/assets/stamp.png')
       .mockResolvedValueOnce('C:/exports/page-pngs')
       .mockResolvedValueOnce('C:/exports/split-pages')
     saveDialogMock
@@ -483,6 +491,7 @@ describe('Sampadan desktop app regression suite', () => {
     await user.type(titleInput, 'Viewer First Regression')
     await user.click(screen.getByRole('button', { name: 'Apply Metadata' }))
     await user.click(screen.getByRole('button', { name: 'Apply Watermark' }))
+    await user.click(screen.getByRole('button', { name: 'Place Image Stamp' }))
     await user.click(screen.getByRole('button', { name: 'Add Page Numbers' }))
 
     await user.click(screen.getByRole('button', { name: 'Export PNG' }))
@@ -499,6 +508,7 @@ describe('Sampadan desktop app regression suite', () => {
     })
 
     expectCamelCasePayloadKeys(getInvokePayloads('inspect_pdf_bytes'), ['fileName', 'bytesBase64'])
+    expectCamelCasePayloadKeys(getInvokePayloads('load_file_bytes'), ['path'])
     expectCamelCasePayloadKeys(getInvokePayloads('save_file_bytes'), ['path', 'bytesBase64'])
   })
 })

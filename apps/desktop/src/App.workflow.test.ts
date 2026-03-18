@@ -205,6 +205,7 @@ describe('real PDF workflow actions', () => {
   test('button flows mutate and export real PDF bytes without throwing', async () => {
     const sourcePath = 'C:/docs/workflow.pdf'
     const insertPath = 'C:/docs/insert-source.pdf'
+    const imagePath = 'C:/assets/stamp.png'
     const mergePath = 'C:/docs/merge-source.pdf'
     const sourceBytes = await createSamplePdf(3)
     const insertBytes = await createSamplePdf(1)
@@ -216,7 +217,7 @@ describe('real PDF workflow actions', () => {
     ])
     let currentBytes = sourceBytes
     let directorySelectionIndex = 0
-    const openSelections = [sourcePath, sourcePath, sourcePath, insertPath]
+    const singleFileSelections = [sourcePath, sourcePath, sourcePath, insertPath, imagePath]
 
     invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
       switch (command) {
@@ -239,6 +240,11 @@ describe('real PDF workflow actions', () => {
           currentBytes = bytes
           return buildPayload(bytes, fileNameFromPath(path), path)
         }
+        case 'load_file_bytes':
+          return {
+            fileName: 'stamp.png',
+            bytesBase64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==',
+          }
         case 'inspect_pdf_bytes': {
           const nextBytes = decodeBase64(String(args?.bytesBase64 ?? ''))
           currentBytes = nextBytes
@@ -271,7 +277,7 @@ describe('real PDF workflow actions', () => {
         return [mergePath]
       }
 
-      return openSelections.shift() ?? sourcePath
+      return singleFileSelections.shift() ?? sourcePath
     })
     saveDialogMock
       .mockResolvedValueOnce('C:/docs/workflow-edited.pdf')
@@ -342,6 +348,11 @@ describe('real PDF workflow actions', () => {
       expect(screen.getByText('Added page numbers to page 2')).toBeTruthy()
     })
 
+    await user.click(screen.getByRole('button', { name: 'Place Image Stamp' }))
+    await waitFor(() => {
+      expect(screen.getByText('Placed image stamp on page 2')).toBeTruthy()
+    })
+
     const titleInput = screen.getByLabelText('Title')
     await user.clear(titleInput)
     await user.type(titleInput, 'Workflow Edited')
@@ -395,10 +406,11 @@ describe('real PDF workflow actions', () => {
       const inspectCalls = invokeMock.mock.calls.filter(([command]) => command === 'inspect_pdf_bytes')
       const saveCalls = invokeMock.mock.calls.filter(([command]) => command === 'save_file_bytes')
 
-      expect(inspectCalls.length).toBeGreaterThanOrEqual(10)
+      expect(inspectCalls.length).toBeGreaterThanOrEqual(11)
       expect(saveCalls.length).toBe(17)
     })
 
+    expectCamelCasePayloadKeys(getInvokePayloads('load_file_bytes'), ['path'])
     expectCamelCasePayloadKeys(getInvokePayloads('inspect_pdf_bytes'), ['fileName', 'bytesBase64'])
     expectCamelCasePayloadKeys(getInvokePayloads('save_file_bytes'), ['path', 'bytesBase64'])
 

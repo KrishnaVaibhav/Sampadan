@@ -21,7 +21,7 @@ Current local features include:
 - insert another PDF at the current page position
 - extract current pages and custom page ranges
 - split to single-page PDFs
-- add text watermarks and page numbers to the current page or the full document
+- add text watermarks, image stamps, and page numbers to the current page or the full document
 - export page PNGs and document text
 - run local OCR on the current page or a full document when Tesseract is installed
 - create searchable OCR PDF copies locally

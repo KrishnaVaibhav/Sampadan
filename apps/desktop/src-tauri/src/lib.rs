@@ -9,6 +9,7 @@ pub fn run() {
     .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
       commands::load_pdf,
+      commands::load_file_bytes,
       commands::inspect_pdf_bytes,
       commands::save_file_bytes,
       commands::extract_pdf_attachments,
