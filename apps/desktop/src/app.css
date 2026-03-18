@@ -405,6 +405,23 @@ button:disabled {
   padding-right: 0.15rem;
 }
 
+.page-strip-empty {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.2rem 0;
+  text-align: center;
+  color: var(--text-soft);
+  font-size: 0.76rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.page-strip-empty strong {
+  color: var(--text-main);
+  font-size: 0.82rem;
+}
+
 .page-chip {
   display: flex;
   flex-direction: column;

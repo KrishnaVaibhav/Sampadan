@@ -1235,7 +1235,10 @@
             {/each}
           </div>
         {:else}
-          <p class="muted">Open a PDF to inspect thumbnails and drag pages into a new order.</p>
+          <div class="page-strip-empty">
+            <strong>No pages</strong>
+            <span>Open a PDF to load thumbnails.</span>
+          </div>
         {/if}
       </section>
 
