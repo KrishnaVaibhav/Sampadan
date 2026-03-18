@@ -876,7 +876,8 @@ fn build_encryption_summary(bytes: &[u8], flags: &PdfFlags) -> PdfEncryptionSumm
     .and_then(|dictionary| extract_integer_value(dictionary, "/R"));
   let key_length_bits = dictionary_text
     .as_deref()
-    .and_then(|dictionary| extract_integer_value(dictionary, "/Length"));
+    .and_then(|dictionary| extract_integer_value(dictionary, "/Length"))
+    .map(normalize_key_length_bits);
   let permissions = dictionary_text
     .as_deref()
     .and_then(|dictionary| extract_integer_value(dictionary, "/P"))
@@ -990,6 +991,14 @@ fn infer_encryption_algorithm(
   }
 
   None
+}
+
+fn normalize_key_length_bits(value: i32) -> i32 {
+  if (1..=32).contains(&value) {
+    value.saturating_mul(8)
+  } else {
+    value
+  }
 }
 
 fn extract_byte_range(text: &str) -> Option<Vec<u64>> {
@@ -1402,6 +1411,7 @@ mod tests {
     build_trust_report, classify_pdf, decode_pdf_literal_string, extract_bool_value,
     extract_byte_range, extract_integer_value, extract_name_value, extract_pdf_attachments,
     extract_string_value, find_occurrences, infer_encryption_algorithm,
+    normalize_key_length_bits,
   };
   use flate2::{write::ZlibEncoder, Compression};
   use std::io::Write;
@@ -1521,6 +1531,13 @@ endobj
       infer_encryption_algorithm(Some("<< /CFM /AESV3 >>"), Some(6), Some(256), None, None).as_deref(),
       Some("AES-256 standard security")
     );
+  }
+
+  #[test]
+  fn normalize_key_length_bits_converts_byte_counts_to_bits() {
+    assert_eq!(normalize_key_length_bits(32), 256);
+    assert_eq!(normalize_key_length_bits(16), 128);
+    assert_eq!(normalize_key_length_bits(256), 256);
   }
 
   #[test]

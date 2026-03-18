@@ -43,7 +43,11 @@
     PageThumbnail,
     PdfFlags,
     PdfMetadataDraft,
+    PdfProtectionModifyAccess,
+    PdfProtectionOptionsPayload,
+    PdfProtectionPrintAccess,
     PdfTrustReport,
+    QpdfStatusPayload,
     WorkspaceDocument,
   } from './lib/types'
   import { extractDocumentText, generatePageThumbnails, renderPdfPageToCanvas } from './lib/viewer/pdf-viewer'
@@ -92,6 +96,20 @@
     { value: 'header-left', label: 'Header left' },
   ]
 
+  const protectionPrintOptions: Array<{ value: PdfProtectionPrintAccess; label: string }> = [
+    { value: 'full', label: 'Full printing' },
+    { value: 'low', label: 'Low-res printing' },
+    { value: 'none', label: 'No printing' },
+  ]
+
+  const protectionModifyOptions: Array<{ value: PdfProtectionModifyAccess; label: string }> = [
+    { value: 'annotate', label: 'Comments and forms' },
+    { value: 'form', label: 'Forms and signing' },
+    { value: 'assembly', label: 'Assembly only' },
+    { value: 'all', label: 'All edits' },
+    { value: 'none', label: 'No edits' },
+  ]
+
   let viewerCanvas: HTMLCanvasElement | null = null
   let viewerPane: HTMLDivElement | null = null
   let pdfProxy: PdfProxy | null = null
@@ -122,12 +140,20 @@
   let ocrPreview = ''
   let ocrPreviewLabel = 'No OCR text yet'
   let ocrLastDurationMs: number | null = null
+  let qpdfStatus: QpdfStatusPayload | null = null
+  let protectionUserPassword = ''
+  let protectionOwnerPassword = ''
+  let protectionPrint: PdfProtectionPrintAccess = 'full'
+  let protectionModify: PdfProtectionModifyAccess = 'annotate'
+  let protectionAllowExtract = true
+  let protectionEncryptMetadata = true
 
   $: pageItems = workspace ? Array.from({ length: workspace.pageCount }, (_, index) => index + 1) : []
   $: currentZoomLabel = `${Math.round(zoom * 100)}%`
   $: thumbnailMap = new Map(thumbnails.map((thumbnail) => [thumbnail.pageNumber, thumbnail]))
   $: ocrAvailableLanguages = ocrStatus?.languages ?? []
   $: ocrReady = ocrStatus?.available ?? false
+  $: qpdfReady = qpdfStatus?.available ?? false
   $: signatureSummaries = workspace?.trustReport.signatures ?? []
   $: signatureValidationRuntime = workspace?.trustReport.signatureValidationRuntime ?? null
   $: attachmentSummaries = workspace?.trustReport.attachments ?? []
@@ -151,6 +177,7 @@
   onMount(() => {
     recentPaths = loadRecentPaths()
     void refreshOcrStatus()
+    void refreshQpdfStatus()
 
     const handleKeyDown = (event: KeyboardEvent) => {
       const modifier = event.ctrlKey || event.metaKey
@@ -708,6 +735,86 @@
       status = `Placed image stamp on ${scopeLabel}`
     } catch (error) {
       reportError(error, 'Failed to place the image stamp')
+    } finally {
+      busy = false
+    }
+  }
+
+  async function refreshQpdfStatus() {
+    try {
+      qpdfStatus = await invoke<QpdfStatusPayload>('get_qpdf_status')
+    } catch (error) {
+      qpdfStatus = {
+        available: false,
+        binaryPath: null,
+        version: null,
+        missingReason: error instanceof Error ? error.message : String(error),
+      }
+    }
+  }
+
+  async function saveProtectedCopy() {
+    if (!workspace || busy) return
+
+    if (!qpdfReady) {
+      reportError(qpdfStatus?.missingReason ?? 'Install qpdf to save protected PDF copies.', 'Protection is unavailable')
+      return
+    }
+
+    const ownerPassword = protectionOwnerPassword.trim()
+    const userPassword = protectionUserPassword.trim()
+
+    if (!ownerPassword) {
+      reportError(new Error('Enter an owner password before saving a protected copy.'), 'Owner password required')
+      return
+    }
+
+    if (userPassword && userPassword === ownerPassword) {
+      reportError(new Error('Use different open and owner passwords to avoid weak PDF protection.'), 'Insecure protection settings')
+      return
+    }
+
+    const targetPath = await saveDialog({
+      defaultPath: `${withoutExtension(workspace.fileName)}-protected.pdf`,
+      filters: [{ name: 'PDF documents', extensions: ['pdf'] }],
+    })
+    if (!targetPath) {
+      statusTone = 'idle'
+      status = 'Protected copy export cancelled'
+      lastError = null
+      return
+    }
+
+    const options: PdfProtectionOptionsPayload = {
+      userPassword: userPassword || null,
+      ownerPassword,
+      print: protectionPrint,
+      modify: protectionModify,
+      allowExtract: protectionAllowExtract,
+      encryptMetadata: protectionEncryptMetadata,
+    }
+
+    busy = true
+    statusTone = 'busy'
+    status = `Creating protected copy for ${workspace.fileName}`
+    lastError = null
+
+    try {
+      const protectedPayload = await invoke<LoadedPdfPayload>('protect_pdf_bytes', {
+        fileName: fileNameFromPath(targetPath),
+        bytesBase64: bytesToBase64(workspace.bytes),
+        options,
+      })
+
+      await invoke('save_file_bytes', {
+        path: targetPath,
+        bytesBase64: protectedPayload.bytesBase64,
+      })
+
+      statusTone = 'idle'
+      status = `Saved protected copy as ${fileNameFromPath(targetPath)}`
+    } catch (error) {
+      reportError(error, 'Failed to save the protected PDF copy')
     } finally {
       busy = false
     }
@@ -1647,6 +1754,7 @@
               <span>{withExtension(workspace.fileName, '.png')}</span>
               <span>{withExtension(workspace.fileName, '.txt')}</span>
               <span>{`${withoutExtension(workspace.fileName)}-ocr.txt`}</span>
+              <span>{`${withoutExtension(workspace.fileName)}-protected.pdf`}</span>
               <span>{`${withoutExtension(workspace.fileName)}-trust-report.json`}</span>
               <span>{withExtension(workspace.fileName, '.docx')} planned</span>
             </div>
@@ -1856,6 +1964,7 @@
               <span>File IO: Rust + Tauri</span>
               <span>OCR: {ocrReady ? `Tesseract ${ocrStatus?.version ?? 'ready'}` : 'Install local Tesseract'}</span>
               <span>Searchable OCR PDF: local generated copy</span>
+              <span>Protection export: {qpdfReady ? `qpdf ${qpdfStatus?.version ?? 'ready'}` : 'Install local qpdf'}</span>
               <span>
                 Trust: structural analysis plus local OpenSSL-backed detached signature verification when available
               </span>
@@ -1872,6 +1981,95 @@
           </div>
           <p class="muted">Document classification and metadata editing will appear here after load.</p>
         {/if}
+      </div>
+    </details>
+
+    <details class="card utility-panel protection-panel" open={Boolean(workspace)}>
+      <summary class="dock-summary">
+        <span>Protection</span>
+        <small>{qpdfReady ? 'Ready' : 'Unavailable'}</small>
+      </summary>
+      <div class="dock-body">
+        <div class="inspector-block">
+          <span class="meta-label">Runtime</span>
+          {#if qpdfStatus}
+            <strong>{qpdfReady ? 'qpdf detected' : 'qpdf unavailable'}</strong>
+            <span class="muted">{qpdfStatus.binaryPath ?? qpdfStatus.missingReason ?? 'Unknown qpdf state'}</span>
+            {#if qpdfStatus.version}
+              <span class="muted">{qpdfStatus.version}</span>
+            {/if}
+          {:else}
+            <strong>Checking protection runtime</strong>
+            <span class="muted">Sampadan is probing the local device for qpdf.</span>
+          {/if}
+        </div>
+
+        <p class="muted panel-note">
+          Save a protected copy without replacing the current viewer session.
+        </p>
+
+        <div class="field-grid">
+          <label class="field">
+            <span class="field-label">Open Password</span>
+            <input
+              class="field-input"
+              type="password"
+              bind:value={protectionUserPassword}
+              placeholder="Optional"
+              disabled={busy}
+            />
+          </label>
+          <label class="field">
+            <span class="field-label">Owner Password</span>
+            <input
+              class="field-input"
+              type="password"
+              bind:value={protectionOwnerPassword}
+              placeholder="Required"
+              disabled={busy}
+            />
+          </label>
+          <label class="field">
+            <span class="field-label">Print Access</span>
+            <select class="field-input" bind:value={protectionPrint} disabled={busy}>
+              {#each protectionPrintOptions as option}
+                <option value={option.value}>{option.label}</option>
+              {/each}
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">Edit Access</span>
+            <select class="field-input" bind:value={protectionModify} disabled={busy}>
+              {#each protectionModifyOptions as option}
+                <option value={option.value}>{option.label}</option>
+              {/each}
+            </select>
+          </label>
+        </div>
+
+        <label class="check-field">
+          <input class="check-input" type="checkbox" bind:checked={protectionAllowExtract} disabled={busy} />
+          <span>Allow text and graphic extraction</span>
+        </label>
+        <label class="check-field">
+          <input class="check-input" type="checkbox" bind:checked={protectionEncryptMetadata} disabled={busy} />
+          <span>Encrypt metadata in the protected copy</span>
+        </label>
+
+        {#if workspace?.flags.signed}
+          <p class="muted panel-note">Saving a protected copy will invalidate existing signatures on the new file.</p>
+        {/if}
+
+        <div class="tool-grid">
+          <button on:click={refreshQpdfStatus} disabled={busy}>Refresh Protection</button>
+          <button
+            data-testid="save-protected-copy-button"
+            on:click={saveProtectedCopy}
+            disabled={busy || !workspace || !qpdfReady}
+          >
+            Save Protected Copy
+          </button>
+        </div>
       </div>
     </details>
 

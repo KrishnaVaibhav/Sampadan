@@ -165,6 +165,13 @@ describe('real PDF workflow actions', () => {
             recommendedLanguage: 'eng',
             missingReason: 'Tesseract not installed for this workflow test',
           }
+        case 'get_qpdf_status':
+          return {
+            available: true,
+            binaryPath: 'C:/Program Files/qpdf 12.3.2/bin/qpdf.exe',
+            version: 'qpdf version 12.3.2',
+            missingReason: null,
+          }
         case 'load_pdf': {
           const path = String(args?.path ?? '')
           const storedBytes = diskFiles.get(path)
@@ -229,6 +236,13 @@ describe('real PDF workflow actions', () => {
             languages: [],
             recommendedLanguage: 'eng',
             missingReason: 'Tesseract not installed for this workflow test',
+          }
+        case 'get_qpdf_status':
+          return {
+            available: true,
+            binaryPath: 'C:/Program Files/qpdf 12.3.2/bin/qpdf.exe',
+            version: 'qpdf version 12.3.2',
+            missingReason: null,
           }
         case 'load_pdf': {
           const path = String(args?.path ?? '')

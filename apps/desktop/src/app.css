@@ -514,6 +514,30 @@ button:disabled {
   box-shadow: 0 0 0 3px rgba(243, 165, 48, 0.12);
 }
 
+.check-field {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  color: var(--text-soft);
+}
+
+.check-field span {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.check-input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.panel-note {
+  margin: 0;
+}
+
 .stack-actions,
 .tool-grid {
   display: grid;

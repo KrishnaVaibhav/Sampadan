@@ -213,8 +213,17 @@ beforeEach(() => {
           recommendedLanguage: 'eng',
           missingReason: null,
         }
+      case 'get_qpdf_status':
+        return {
+          available: true,
+          binaryPath: 'C:/Program Files/qpdf 12.3.2/bin/qpdf.exe',
+          version: 'qpdf version 12.3.2',
+          missingReason: null,
+        }
       case 'load_pdf':
         return createPayload()
+      case 'protect_pdf_bytes':
+        return createPayload((args?.fileName as string | undefined) ?? 'sample-protected.pdf', null)
       case 'load_file_bytes':
         return {
           fileName: 'stamp.png',
@@ -297,6 +306,7 @@ describe('Sampadan desktop app regression suite', () => {
       'Apply Watermark',
       'Place Image Stamp',
       'Add Page Numbers',
+      'Save Protected Copy',
     ]) {
       expect((screen.getByRole('button', { name: label }) as HTMLButtonElement).disabled).toBe(false)
     }
@@ -454,6 +464,53 @@ describe('Sampadan desktop app regression suite', () => {
     })
 
     expectCamelCasePayloadKeys(getInvokePayloads('run_ocr_image'), ['bytesBase64', 'language', 'sourceLabel'])
+    expectCamelCasePayloadKeys(getInvokePayloads('save_file_bytes'), ['path', 'bytesBase64'])
+  })
+
+  test('exports a protected copy through the local qpdf pipeline', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
+    saveDialogMock.mockResolvedValue('C:/exports/sample-protected.pdf')
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect((screen.getByTestId('save-protected-copy-button') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    await user.type(screen.getByLabelText('Open Password'), 'viewer-secret')
+    await user.type(screen.getByLabelText('Owner Password'), 'owner-secret')
+    await user.click(screen.getByTestId('save-protected-copy-button'))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        'protect_pdf_bytes',
+        expect.objectContaining({
+          fileName: 'sample-protected.pdf',
+          bytesBase64: expect.any(String),
+          options: expect.objectContaining({
+            userPassword: 'viewer-secret',
+            ownerPassword: 'owner-secret',
+            print: 'full',
+            modify: 'annotate',
+            allowExtract: true,
+            encryptMetadata: true,
+          }),
+        }),
+      )
+      expect(invokeMock).toHaveBeenCalledWith(
+        'save_file_bytes',
+        expect.objectContaining({
+          path: 'C:/exports/sample-protected.pdf',
+          bytesBase64: expect.any(String),
+        }),
+      )
+    })
+
+    expectCamelCasePayloadKeys(getInvokePayloads('protect_pdf_bytes'), ['fileName', 'bytesBase64', 'options'])
+    const protectionOptions = getInvokePayloads('protect_pdf_bytes')[0]?.options as Record<string, unknown>
+    expect(Object.keys(protectionOptions).some((key) => key.includes('_'))).toBe(false)
     expectCamelCasePayloadKeys(getInvokePayloads('save_file_bytes'), ['path', 'bytesBase64'])
   })
 

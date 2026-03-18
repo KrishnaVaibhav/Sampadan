@@ -108,6 +108,18 @@ export interface LoadedFileBytesPayload {
   bytesBase64: string
 }
 
+export type PdfProtectionPrintAccess = 'none' | 'low' | 'full'
+export type PdfProtectionModifyAccess = 'none' | 'assembly' | 'form' | 'annotate' | 'all'
+
+export interface PdfProtectionOptionsPayload {
+  userPassword: string | null
+  ownerPassword: string
+  print: PdfProtectionPrintAccess
+  modify: PdfProtectionModifyAccess
+  allowExtract: boolean
+  encryptMetadata: boolean
+}
+
 export interface PdfMetadataDraft {
   title: string
   author: string
@@ -130,6 +142,13 @@ export interface OcrStatusPayload {
   version: string | null
   languages: string[]
   recommendedLanguage: string | null
+  missingReason: string | null
+}
+
+export interface QpdfStatusPayload {
+  available: boolean
+  binaryPath: string | null
+  version: string | null
   missingReason: string | null
 }
 

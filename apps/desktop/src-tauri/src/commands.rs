@@ -1,6 +1,7 @@
 use crate::{
   ocr,
   pdf_inspect::{self, PdfFlags, PdfTrustReport},
+  qpdf,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Serialize;
@@ -67,6 +68,25 @@ pub fn inspect_pdf_bytes(
     .map_err(|error| format!("Failed to decode document bytes: {error}"))?;
 
   Ok(build_loaded_pdf(None, file_name, bytes))
+}
+
+#[tauri::command]
+pub fn get_qpdf_status() -> qpdf::QpdfStatus {
+  qpdf::probe_qpdf()
+}
+
+#[tauri::command]
+pub fn protect_pdf_bytes(
+  file_name: Option<String>,
+  bytes_base64: String,
+  options: qpdf::PdfProtectionOptions,
+) -> Result<LoadedPdf, String> {
+  let bytes = STANDARD
+    .decode(bytes_base64)
+    .map_err(|error| format!("Failed to decode document bytes: {error}"))?;
+  let protected_bytes = qpdf::protect_pdf_bytes(&bytes, &options)?;
+
+  Ok(build_loaded_pdf(None, file_name, protected_bytes))
 }
 
 #[tauri::command]

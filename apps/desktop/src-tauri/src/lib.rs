@@ -1,6 +1,7 @@
 mod commands;
 mod ocr;
 mod pdf_inspect;
+mod qpdf;
 mod signature_validation;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -11,6 +12,8 @@ pub fn run() {
       commands::load_pdf,
       commands::load_file_bytes,
       commands::inspect_pdf_bytes,
+      commands::get_qpdf_status,
+      commands::protect_pdf_bytes,
       commands::save_file_bytes,
       commands::extract_pdf_attachments,
       commands::get_ocr_status,

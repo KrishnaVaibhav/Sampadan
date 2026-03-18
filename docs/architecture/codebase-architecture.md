@@ -29,8 +29,9 @@ The product target is:
 - Viewer/rendering: `PDF.js`
 - PDF mutation today: `pdf-lib`
 - Native OCR today: local `Tesseract` runtime detection and invocation
+- Native protected-copy export today: local `qpdf` runtime detection and AES-256 protected-copy generation
 - Native signature validation today: local `OpenSSL` runtime detection, detached CMS verification, and signer certificate inspection
-- Native PDF pipeline planned: `qpdf`, `PDFium`
+- Native PDF pipeline planned: deeper `qpdf` repair/normalization plus `PDFium`
 
 ## Repository Layout
 
@@ -100,6 +101,8 @@ Current commands:
 - `load_pdf`
 - `load_file_bytes`
 - `inspect_pdf_bytes`
+- `get_qpdf_status`
+- `protect_pdf_bytes`
 - `save_file_bytes`
 - `extract_pdf_attachments`
 - `get_ocr_status`
@@ -108,6 +111,7 @@ Current commands:
 
 The same inspection pass now returns a native trust report with parsed signature, attachment, and encryption details when they are available. When a signed PDF exposes a detached CMS payload and a usable `ByteRange`, Sampadan also attempts local cryptographic verification through `OpenSSL`, inventories embedded signer certificates, and tries a local CA-store chain validation. Revocation is not checked yet.
 Embedded file export also routes through the native layer so attachment parsing and stream decoding stay outside the UI thread.
+Protected-copy export also routes through Rust so password handling, qpdf invocation, and the resulting encrypted bytes stay out of the browser-side layer.
 
 ### 4. Document Engine Layer
 
@@ -158,6 +162,15 @@ Planned split:
 5. Frontend can review text in memory or merge page-level OCR PDFs into a generated searchable copy.
 6. User exports the OCR text or saves the searchable PDF copy explicitly.
 
+### Save Protected Copy
+
+1. UI collects owner/open password settings plus permission choices.
+2. Frontend sends the current PDF bytes and protection options to Rust.
+3. Rust resolves the local `qpdf` runtime and stages temporary input/output files.
+4. `qpdf` generates an AES-256 protected copy with the selected permission restrictions.
+5. Rust reclassifies the protected bytes and returns them to the UI.
+6. Frontend saves the protected copy without replacing the current viewer session.
+
 ## State Model
 
 The frontend keeps one active `WorkspaceDocument`.
@@ -199,6 +212,8 @@ These are the modules the codebase should grow into instead of adding more logic
   PDF.js canvas rendering, thumbnails, and text extraction
 - `src/lib/operations/pdf-document.ts`
   merge, insert, rotate, extract, reorder, split, watermark, image stamping, page numbering, metadata, and export helpers
+- `src/lib/types.ts`
+  shared desktop payloads for trust, OCR, qpdf runtime state, and protected-copy options
 - `src/lib/ocr/ocr-client.ts`
   OCR status probing and native OCR text/PDF invocation bridge
 - `src/App.test.ts`
@@ -222,6 +237,8 @@ These are the modules the codebase should grow into instead of adding more logic
   PDF versioning, classification, signature parsing, trust report generation, and validation orchestration
 - `src-tauri/src/ocr.rs`
   local Tesseract detection, language enumeration, and image OCR text/PDF execution
+- `src-tauri/src/qpdf.rs`
+  local qpdf detection, protected-copy option validation, and encrypted PDF generation
 - `src-tauri/src/signature_validation.rs`
   local OpenSSL detection, detached CMS verification, signer certificate extraction, and certificate-chain trust checks
 - `src-tauri/src/pdf/`
@@ -292,12 +309,13 @@ Status on March 18, 2026:
 - native signature/trust report inspection implemented
 - native attachment inspection implemented
 - native encryption summary inspection implemented
+- write-side protected-copy export implemented through local qpdf
 - detached CMS signature integrity verification implemented through local OpenSSL
 - signer certificate inventory implemented through local OpenSSL
 - local CA-store certificate-chain trust attempts implemented
 - regression tests now cover critical viewer, OCR, trust, edit, and export controls
 - real-PDF regression coverage now exercises open, reorder, duplicate, delete, blank-page insert, extract, metadata apply, save, merge, and export flows
-- revocation, timestamp authority validation depth, and write-side encryption controls still pending
+- revocation and deeper timestamp authority validation still pending
 
 ### Milestone 4
 
