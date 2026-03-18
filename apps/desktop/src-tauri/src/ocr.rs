@@ -372,7 +372,14 @@ fn parse_languages_output(output: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-  use super::{parse_languages_output, recommend_language, resolve_language};
+  use super::{
+    parse_languages_output, probe_tesseract, recommend_language, resolve_language, run_ocr_image,
+    run_ocr_pdf,
+  };
+
+  fn sample_ocr_png_bytes() -> Vec<u8> {
+    include_bytes!("../tests/assets/ocr-smoke.png").to_vec()
+  }
 
   #[test]
   fn parse_languages_output_skips_header_and_deduplicates() {
@@ -412,5 +419,66 @@ hin
     let error = resolve_language(Some("hin"), &languages).expect_err("language should fail");
 
     assert!(error.contains("Available languages: eng"));
+  }
+
+  #[test]
+  fn probe_tesseract_reports_local_runtime_when_installed() {
+    let status = probe_tesseract();
+
+    if !status.available {
+      eprintln!(
+        "Skipping local OCR runtime smoke check because Tesseract is unavailable: {}",
+        status
+          .missing_reason
+          .unwrap_or_else(|| "unknown reason".to_string())
+      );
+      return;
+    }
+
+    assert!(status.binary_path.is_some());
+    assert!(status.version.is_some());
+    assert!(!status.languages.is_empty());
+  }
+
+  #[test]
+  fn run_ocr_image_smoke_test_with_local_tesseract() {
+    let status = probe_tesseract();
+    if !status.available {
+      eprintln!(
+        "Skipping OCR image smoke test because Tesseract is unavailable: {}",
+        status
+          .missing_reason
+          .unwrap_or_else(|| "unknown reason".to_string())
+      );
+      return;
+    }
+
+    let result = run_ocr_image(&sample_ocr_png_bytes(), Some("eng"), "ocr-smoke-image")
+      .expect("OCR image smoke test should succeed");
+
+    let normalized = result.text.to_uppercase();
+    assert!(normalized.contains("SAMPADAN"));
+    assert!(normalized.contains("OCR"));
+    assert!(normalized.contains("2026"));
+  }
+
+  #[test]
+  fn run_ocr_pdf_smoke_test_with_local_tesseract() {
+    let status = probe_tesseract();
+    if !status.available {
+      eprintln!(
+        "Skipping OCR PDF smoke test because Tesseract is unavailable: {}",
+        status
+          .missing_reason
+          .unwrap_or_else(|| "unknown reason".to_string())
+      );
+      return;
+    }
+
+    let result = run_ocr_pdf(&sample_ocr_png_bytes(), Some("eng"), "ocr-smoke-pdf")
+      .expect("OCR PDF smoke test should succeed");
+
+    assert!(result.pdf_bytes.starts_with(b"%PDF-"));
+    assert!(!result.pdf_bytes.is_empty());
   }
 }
