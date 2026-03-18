@@ -966,6 +966,53 @@ describe('Sampadan desktop app regression suite', () => {
     expect(Number.parseFloat((screen.getByLabelText('Width %') as HTMLInputElement).value)).toBeCloseTo(24, 1)
   })
 
+  test('extends and shrinks the direct text selection with keyboard arrows', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect((screen.getByTestId('toggle-text-target-button') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    await user.click(screen.getByTestId('toggle-text-target-button'))
+    await waitFor(() => {
+      expect(screen.getByLabelText('Target text: Page')).toBeTruthy()
+    })
+
+    await user.click(screen.getByLabelText('Target text: Page'))
+    await fireEvent.keyDown(window, { key: 'ArrowRight', shiftKey: true })
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: Page 1')).toBeTruthy()
+      expect(screen.getByText('2 contiguous targets selected')).toBeTruthy()
+    })
+
+    await fireEvent.keyDown(window, { key: 'ArrowRight', shiftKey: true })
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: Page 1 line')).toBeTruthy()
+      expect(screen.getByText('3 contiguous targets selected')).toBeTruthy()
+    })
+
+    await fireEvent.keyDown(window, { key: 'ArrowLeft', shiftKey: true })
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: Page 1')).toBeTruthy()
+      expect(screen.getByText('2 contiguous targets selected')).toBeTruthy()
+    })
+
+    await fireEvent.keyDown(window, { key: 'ArrowLeft' })
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: Page')).toBeTruthy()
+    })
+
+    expect((screen.getByLabelText('Quick Replace Text') as HTMLTextAreaElement).value).toBe('Page')
+  })
+
   test('adds true PDF annotations from the selected text flow', async () => {
     openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
 

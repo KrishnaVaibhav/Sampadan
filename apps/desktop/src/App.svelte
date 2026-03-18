@@ -322,6 +322,7 @@
 
     const handleKeyDown = (event: KeyboardEvent) => {
       const modifier = event.ctrlKey || event.metaKey
+      const textInputTarget = isTextInputTarget(event.target)
 
       if (textTargetMode && inlineTextEditorOpen && selectedTextSpan && event.key === 'Escape') {
         event.preventDefault()
@@ -335,6 +336,18 @@
         return
       }
 
+      if (!modifier && textTargetMode && currentPageTextSpans.length > 0 && !textInputTarget && event.key === 'ArrowLeft') {
+        event.preventDefault()
+        void moveTextTargetSelection(-1, event.shiftKey)
+        return
+      }
+
+      if (!modifier && textTargetMode && currentPageTextSpans.length > 0 && !textInputTarget && event.key === 'ArrowRight') {
+        event.preventDefault()
+        void moveTextTargetSelection(1, event.shiftKey)
+        return
+      }
+
       if (modifier && event.key.toLowerCase() === 'o') {
         event.preventDefault()
         void openPdfFlow()
@@ -345,12 +358,12 @@
         void saveWorkspace(event.shiftKey)
       }
 
-      if (!modifier && workspace && event.key === 'ArrowLeft') {
+      if (!modifier && workspace && !textInputTarget && event.key === 'ArrowLeft') {
         event.preventDefault()
         void goToPage(currentPage - 1)
       }
 
-      if (!modifier && workspace && event.key === 'ArrowRight') {
+      if (!modifier && workspace && !textInputTarget && event.key === 'ArrowRight') {
         event.preventDefault()
         void goToPage(currentPage + 1)
       }
@@ -2497,6 +2510,15 @@
     return 0
   }
 
+  function isTextInputTarget(target: EventTarget | null) {
+    if (!(target instanceof HTMLElement)) {
+      return false
+    }
+
+    const tagName = target.tagName.toUpperCase()
+    return tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT' || target.isContentEditable
+  }
+
   function resolveTextEditLayout() {
     const xPercent = parseBoundedNumber(textEditX, 'Edit X', 0, 95)
     const yPercent = parseBoundedNumber(textEditY, 'Edit Y', 0, 95)
@@ -2587,6 +2609,93 @@
     textTargetDragSession = null
   }
 
+  async function applySelectedTextRange(anchorIndex: number, extentIndex: number, options: { focusEditor?: boolean } = {}) {
+    if (anchorIndex < 0 || extentIndex < 0 || currentPageTextSpans.length === 0) {
+      return
+    }
+
+    const clampedAnchorIndex = clamp(anchorIndex, 0, currentPageTextSpans.length - 1)
+    const clampedExtentIndex = clamp(extentIndex, 0, currentPageTextSpans.length - 1)
+    const start = Math.min(clampedAnchorIndex, clampedExtentIndex)
+    const end = Math.max(clampedAnchorIndex, clampedExtentIndex)
+    const nextSelection = currentPageTextSpans.slice(start, end + 1)
+    const nextTarget = buildSelectedTextTarget(nextSelection)
+
+    if (!nextTarget) {
+      return
+    }
+
+    selectedTextAnchorId = currentPageTextSpans[clampedAnchorIndex]?.id ?? null
+    selectedTextSpanIds = nextSelection.map((candidate) => candidate.id)
+    inlineTextEditorOpen = true
+    textEditContent = nextTarget.text
+    applyTextEditRegion({
+      xPercent: nextTarget.xPercent,
+      yPercent: nextTarget.yPercent,
+      widthPercent: Math.max(nextTarget.widthPercent, 5),
+      heightPercent: Math.max(nextTarget.heightPercent, 5),
+      fontSize: nextTarget.fontSize,
+    })
+    textEditAlignment = 'left'
+
+    if (options.focusEditor ?? true) {
+      await tick()
+      inlineTextEditor?.focus()
+      inlineTextEditor?.select()
+    }
+  }
+
+  function resolveSelectedTextExtentId() {
+    if (selectedTextSpanIds.length === 0) {
+      return null
+    }
+
+    if (!selectedTextAnchorId || selectedTextSpanIds.length === 1) {
+      return selectedTextSpanIds.at(-1) ?? null
+    }
+
+    return selectedTextSpanIds[0] === selectedTextAnchorId
+      ? (selectedTextSpanIds.at(-1) ?? selectedTextAnchorId)
+      : selectedTextSpanIds[0]
+  }
+
+  async function moveTextTargetSelection(direction: -1 | 1, extendSelection: boolean) {
+    if (currentPageTextSpans.length === 0) {
+      return
+    }
+
+    if (selectedTextSpanIds.length === 0 || !selectedTextSpan) {
+      const initialIndex = direction > 0 ? 0 : currentPageTextSpans.length - 1
+      await applySelectedTextRange(initialIndex, initialIndex, { focusEditor: false })
+      return
+    }
+
+    const anchorId = selectedTextAnchorId ?? selectedTextSpanIds[0]
+    const extentId = resolveSelectedTextExtentId() ?? anchorId
+    const anchorIndex = currentPageTextSpans.findIndex((span) => span.id === anchorId)
+    const extentIndex = currentPageTextSpans.findIndex((span) => span.id === extentId)
+
+    if (anchorIndex < 0 || extentIndex < 0) {
+      return
+    }
+
+    const nextIndex = clamp(extentIndex + direction, 0, currentPageTextSpans.length - 1)
+    if (!extendSelection) {
+      if (nextIndex === extentIndex && selectedTextSpanIds.length === 1) {
+        return
+      }
+
+      await applySelectedTextRange(nextIndex, nextIndex, { focusEditor: false })
+      return
+    }
+
+    if (nextIndex === extentIndex) {
+      return
+    }
+
+    await applySelectedTextRange(anchorIndex, nextIndex, { focusEditor: false })
+  }
+
   function selectAnnotation(annotation: PdfPageAnnotationOverlay) {
     selectedAnnotationId = annotation.id
     reviewNoteTitle = annotation.title?.trim() || 'Review Note'
@@ -2648,37 +2757,17 @@
         selectedTextAnchorId = span.id
       }
     } else {
-      selectedTextAnchorId = span.id
+      nextSelection = [span]
     }
 
-    selectedTextSpanIds = nextSelection.map((candidate) => candidate.id)
-    inlineTextEditorOpen = true
-    const nextTarget = buildSelectedTextTarget(nextSelection)
-    textEditContent = nextTarget?.text ?? span.text
-    applyTextEditRegion(
-      nextTarget
-        ? {
-            xPercent: nextTarget.xPercent,
-            yPercent: nextTarget.yPercent,
-            widthPercent: Math.max(nextTarget.widthPercent, 5),
-            heightPercent: Math.max(nextTarget.heightPercent, 5),
-            fontSize: nextTarget.fontSize,
-          }
-        : {
-            xPercent: span.xPercent,
-            yPercent: span.yPercent,
-            widthPercent: Math.max(span.widthPercent, 5),
-            heightPercent: Math.max(span.heightPercent, 5),
-            fontSize: span.fontSize,
-          },
+    const extentSpan = nextSelection.at(-1) ?? span
+    await applySelectedTextRange(
+      selectedTextAnchorId && options.extendSelection
+        ? currentPageTextSpans.findIndex((candidate) => candidate.id === selectedTextAnchorId)
+        : spanIndex,
+      currentPageTextSpans.findIndex((candidate) => candidate.id === extentSpan.id),
+      { focusEditor: options.focusEditor },
     )
-    textEditAlignment = 'left'
-
-    if (options.focusEditor ?? true) {
-      await tick()
-      inlineTextEditor?.focus()
-      inlineTextEditor?.select()
-    }
   }
 
   function resolveInlineTextEditorPosition() {
@@ -3399,7 +3488,7 @@
               Strike Out Text
             </button>
           </div>
-          <span class="muted">Shift-click adjacent targets to grow the selection like an inline text range.</span>
+          <span class="muted">Shift-click or use Shift+Arrow Left/Right to grow the selection like an inline text range.</span>
           {#if selectedTextSpan}
             <div class="stack-list attachment-entry">
               <span>Selected: {selectedTextSpan.text}</span>
