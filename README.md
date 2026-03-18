@@ -15,3 +15,7 @@ Bootstrap phase.
 ## License
 
 Apache-2.0
+
+Copyright 2026 Krishna Vaibhav.
+
+The full license text is in `LICENSE`. Project attribution notices are in `NOTICE`.
