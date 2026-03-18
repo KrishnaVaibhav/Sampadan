@@ -11,3 +11,7 @@ The project is intended to cover practical PDF workflows such as editing, OCR, f
 ## Status
 
 Bootstrap phase.
+
+## License
+
+Apache-2.0
