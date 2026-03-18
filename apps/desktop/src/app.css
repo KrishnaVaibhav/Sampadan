@@ -124,6 +124,7 @@ button:disabled {
 .page-strip,
 .viewer-shell,
 .inspector,
+.ocr-panel,
 .error-panel {
   padding: 1.1rem 1.15rem;
 }
@@ -300,7 +301,8 @@ button:disabled {
 
 .page-strip,
 .viewer-shell,
-.inspector {
+.inspector,
+.ocr-panel {
   min-height: 0;
 }
 
@@ -461,6 +463,52 @@ button:disabled {
   gap: 0.95rem;
 }
 
+.ocr-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.ocr-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.ocr-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.ocr-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ocr-preview-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.ocr-preview {
+  width: 100%;
+  min-height: 22rem;
+  resize: vertical;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(180deg, rgba(9, 14, 20, 0.95), rgba(14, 21, 29, 0.92));
+  color: var(--text-main);
+  padding: 1rem;
+  outline: none;
+}
+
+.ocr-preview:focus {
+  border-color: rgba(243, 165, 48, 0.45);
+  box-shadow: 0 0 0 3px rgba(243, 165, 48, 0.12);
+}
+
 .inspector-block {
   display: flex;
   flex-direction: column;
@@ -521,6 +569,10 @@ button:disabled {
   }
 
   .workspace-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ocr-layout {
     grid-template-columns: 1fr;
   }
 

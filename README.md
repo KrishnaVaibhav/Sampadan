@@ -20,6 +20,7 @@ Current local features include:
 - extract current pages and custom page ranges
 - split to single-page PDFs
 - export page PNGs and document text
+- run local OCR on the current page or a full document when Tesseract is installed
 - metadata inspection and editing
 
 ## Architecture
@@ -36,6 +37,8 @@ npm ci
 npm run check
 npm run tauri:dev
 ```
+
+Local OCR currently uses a machine-local Tesseract runtime. On Windows, the desktop app will detect standard installs such as `C:\Program Files\Tesseract-OCR\tesseract.exe`.
 
 Production desktop bundles are created with:
 

@@ -1,3 +1,4 @@
+use crate::ocr;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Serialize;
 use std::{
@@ -92,6 +93,25 @@ pub fn save_file_bytes(path: String, bytes_base64: String) -> Result<(), String>
   })?;
 
   Ok(())
+}
+
+#[tauri::command]
+pub fn get_ocr_status() -> ocr::OcrStatus {
+  ocr::probe_tesseract()
+}
+
+#[tauri::command]
+pub fn run_ocr_image(
+  bytes_base64: String,
+  language: Option<String>,
+  source_label: Option<String>,
+) -> Result<ocr::OcrTextResult, String> {
+  let bytes = STANDARD
+    .decode(bytes_base64)
+    .map_err(|error| format!("Failed to decode OCR image bytes: {error}"))?;
+
+  let resolved_label = source_label.unwrap_or_else(|| "page-preview".to_string());
+  ocr::run_ocr_image(&bytes, language.as_deref(), &resolved_label)
 }
 
 fn build_loaded_pdf(

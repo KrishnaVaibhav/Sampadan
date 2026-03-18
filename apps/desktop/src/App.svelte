@@ -3,6 +3,7 @@
   import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
   import { onMount, tick } from 'svelte'
 
+  import { fetchOcrStatus, runOcrForBlob } from './lib/ocr/ocr-client'
   import { type PdfProxy, loadPdfProxy } from './lib/pdf-engine'
   import {
     applyMetadataToDocument,
@@ -31,6 +32,7 @@
   import { loadRecentPaths, rememberRecentPath } from './lib/session/recent-files'
   import type {
     LoadedPdfPayload,
+    OcrStatusPayload,
     PageThumbnail,
     PdfFlags,
     PdfMetadataDraft,
@@ -69,12 +71,13 @@
         'Extract current pages and custom page ranges',
         'Split documents into single-page PDFs',
         'Export page PNGs and full-document text',
+        'Run local OCR on the current page or full document',
       ],
     },
     {
       title: 'Queued Next',
       items: [
-        'Tesseract OCR jobs',
+        'Searchable scan overlay output',
         'Annotations and comments',
         'AcroForm editing',
         'Signature validation',
@@ -102,10 +105,17 @@
   let metadataDirty = false
   let dragSourcePage: number | null = null
   let dropTargetPage: number | null = null
+  let ocrStatus: OcrStatusPayload | null = null
+  let ocrLanguage = 'eng'
+  let ocrPreview = ''
+  let ocrPreviewLabel = 'No OCR text yet'
+  let ocrLastDurationMs: number | null = null
 
   $: pageItems = workspace ? Array.from({ length: workspace.pageCount }, (_, index) => index + 1) : []
   $: currentZoomLabel = `${Math.round(zoom * 100)}%`
   $: thumbnailMap = new Map(thumbnails.map((thumbnail) => [thumbnail.pageNumber, thumbnail]))
+  $: ocrAvailableLanguages = ocrStatus?.languages ?? []
+  $: ocrReady = ocrStatus?.available ?? false
   $: inspectorFlags = workspace
     ? [
         { label: 'Encrypted', active: workspace.flags.encrypted },
@@ -123,6 +133,7 @@
 
   onMount(() => {
     recentPaths = loadRecentPaths()
+    void refreshOcrStatus()
 
     const handleKeyDown = (event: KeyboardEvent) => {
       const modifier = event.ctrlKey || event.metaKey
@@ -528,6 +539,144 @@
     }
   }
 
+  async function refreshOcrStatus() {
+    try {
+      const nextStatus = await fetchOcrStatus()
+      ocrStatus = nextStatus
+
+      if (
+        !ocrLanguage.trim() ||
+        (nextStatus.recommendedLanguage && !nextStatus.languages.includes(ocrLanguage))
+      ) {
+        ocrLanguage = nextStatus.recommendedLanguage ?? 'eng'
+      }
+    } catch (error) {
+      ocrStatus = {
+        available: false,
+        binaryPath: null,
+        version: null,
+        languages: [],
+        recommendedLanguage: 'eng',
+        missingReason: error instanceof Error ? error.message : String(error),
+      }
+    }
+  }
+
+  async function ocrCurrentPage() {
+    if (!workspace || !pdfProxy || busy) return
+
+    const language = resolveOcrLanguage()
+    if (!ocrReady) {
+      reportError(ocrStatus?.missingReason ?? 'Install Tesseract to enable local OCR.', 'OCR is unavailable')
+      return
+    }
+
+    busy = true
+    statusTone = 'busy'
+    status = `Running OCR on page ${currentPage}`
+    lastError = null
+
+    try {
+      const blob = await renderPageBlob(currentPage, Math.max(zoom, 2.4))
+      const result = await runOcrForBlob(blob, {
+        language,
+        sourceLabel: `${workspace.fileName} page ${currentPage}`,
+      })
+
+      ocrLanguage = result.language
+      ocrLastDurationMs = result.durationMs
+      ocrPreviewLabel = `OCR preview for page ${currentPage}`
+      ocrPreview = buildOcrPreview([{ pageNumber: currentPage, text: result.text }])
+      statusTone = 'idle'
+      status = `OCR complete for page ${currentPage}`
+    } catch (error) {
+      reportError(error, 'Failed to OCR the current page')
+    } finally {
+      busy = false
+    }
+  }
+
+  async function ocrWholeDocument() {
+    if (!workspace || !pdfProxy || busy) return
+
+    const language = resolveOcrLanguage()
+    if (!ocrReady) {
+      reportError(ocrStatus?.missingReason ?? 'Install Tesseract to enable local OCR.', 'OCR is unavailable')
+      return
+    }
+
+    busy = true
+    statusTone = 'busy'
+    status = `Running OCR on ${workspace.pageCount} pages`
+    lastError = null
+
+    try {
+      const results: Array<{ pageNumber: number; text: string }> = []
+
+      for (let pageNumber = 1; pageNumber <= workspace.pageCount; pageNumber += 1) {
+        status = `Running OCR on page ${pageNumber} of ${workspace.pageCount}`
+
+        const blob = await renderPageBlob(pageNumber, 2.4)
+        const result = await runOcrForBlob(blob, {
+          language,
+          sourceLabel: `${workspace.fileName} page ${pageNumber}`,
+        })
+
+        results.push({
+          pageNumber,
+          text: result.text,
+        })
+
+        ocrLanguage = result.language
+        ocrLastDurationMs = result.durationMs
+        ocrPreviewLabel = `OCR preview for ${results.length} of ${workspace.pageCount} pages`
+        ocrPreview = buildOcrPreview(results)
+        await tick()
+      }
+
+      statusTone = 'idle'
+      status = `OCR complete for ${workspace.pageCount} pages`
+    } catch (error) {
+      reportError(error, 'Failed to OCR the full document')
+    } finally {
+      busy = false
+    }
+  }
+
+  async function exportOcrPreviewToFile() {
+    if (!workspace || !ocrPreview || busy) return
+
+    busy = true
+    statusTone = 'busy'
+    status = 'Preparing OCR text export'
+    lastError = null
+
+    try {
+      const targetPath = await saveDialog({
+        defaultPath: `${withoutExtension(workspace.fileName)}-ocr.txt`,
+        filters: [{ name: 'Text file', extensions: ['txt'] }],
+      })
+
+      if (!targetPath) {
+        statusTone = 'idle'
+        status = 'OCR text export cancelled'
+        return
+      }
+
+      await invoke('save_file_bytes', {
+        path: targetPath,
+        bytes_base64: bytesToBase64(new TextEncoder().encode(ocrPreview)),
+      })
+
+      statusTone = 'idle'
+      status = `Exported ${fileNameFromPath(targetPath)}`
+    } catch (error) {
+      reportError(error, 'Failed to export OCR text')
+    } finally {
+      busy = false
+    }
+  }
+
   async function applyMetadata() {
     if (!workspace || busy || !metadataDirty) return
     const currentWorkspace = workspace
@@ -666,6 +815,9 @@
     thumbnails = []
     metadataDraft = emptyMetadata()
     metadataDirty = false
+    ocrPreview = ''
+    ocrPreviewLabel = 'No OCR text yet'
+    ocrLastDurationMs = null
     await tick()
     await renderCurrentPage()
     void refreshWorkspaceContext(nextProxy, bytes)
@@ -742,6 +894,34 @@
   function clearDragState() {
     dragSourcePage = null
     dropTargetPage = null
+  }
+
+  function resolveOcrLanguage() {
+    const candidate = ocrLanguage.trim()
+    if (candidate) {
+      return candidate
+    }
+
+    return ocrStatus?.recommendedLanguage ?? 'eng'
+  }
+
+  function buildOcrPreview(results: Array<{ pageNumber: number; text: string }>) {
+    return results
+      .map(({ pageNumber, text }) => {
+        const normalized = text.trim()
+        return `Page ${pageNumber}\n${normalized || '[No text detected]'}`
+      })
+      .join('\n\n')
+  }
+
+  async function renderPageBlob(pageNumber: number, scale: number) {
+    if (!pdfProxy) {
+      throw new Error('Open a PDF before running OCR.')
+    }
+
+    const canvas = document.createElement('canvas')
+    await renderPdfPageToCanvas(pdfProxy, pageNumber, scale, canvas)
+    return canvasToBlob(canvas)
   }
 
   function normalizeSelection(selection: string | string[] | null): string[] {
@@ -1035,6 +1215,7 @@
               <span>{withExtension(workspace.fileName, '.pdf')}</span>
               <span>{withExtension(workspace.fileName, '.png')}</span>
               <span>{withExtension(workspace.fileName, '.txt')}</span>
+              <span>{`${withoutExtension(workspace.fileName)}-ocr.txt`}</span>
               <span>{withExtension(workspace.fileName, '.docx')} planned</span>
             </div>
           </div>
@@ -1054,7 +1235,8 @@
               <span>Viewer: PDF.js</span>
               <span>Edits: pdf-lib operation layer</span>
               <span>File IO: Rust + Tauri</span>
-              <span>OCR and signatures: next local milestone</span>
+              <span>OCR: {ocrReady ? `Tesseract ${ocrStatus?.version ?? 'ready'}` : 'Install local Tesseract'}</span>
+              <span>Signatures: next local milestone</span>
             </div>
           </div>
         {:else}
@@ -1069,6 +1251,88 @@
           <p class="muted">Document classification and metadata editing will appear here after load.</p>
         {/if}
       </section>
+    </section>
+
+    <section class="card ocr-panel">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">Local OCR</span>
+          <h2>OCR Workbench</h2>
+        </div>
+        <span class:busy-pill={busy && status.startsWith('Running OCR')} class="status-pill">
+          {ocrReady ? 'Ready' : 'Unavailable'}
+        </span>
+      </div>
+
+      <div class="ocr-layout">
+        <div class="ocr-controls">
+          <p class="muted">
+            OCR stays on-device. Sampadan renders pages locally, sends page images to a local
+            Tesseract runtime, and keeps the extracted text in memory until you export it.
+          </p>
+
+          <div class="inspector-block">
+            <span class="meta-label">Runtime</span>
+            {#if ocrStatus}
+              <strong>{ocrReady ? 'Tesseract detected' : 'OCR runtime not available'}</strong>
+              <span class="muted">{ocrStatus.binaryPath ?? ocrStatus.missingReason ?? 'Unknown OCR state'}</span>
+              <span class="muted">
+                {#if ocrReady}
+                  {ocrStatus.version ?? 'Version unknown'} • {ocrAvailableLanguages.length} language{ocrAvailableLanguages.length === 1 ? '' : 's'}
+                {:else}
+                  Install Tesseract locally to enable page and full-document OCR.
+                {/if}
+              </span>
+            {:else}
+              <strong>Checking OCR runtime</strong>
+              <span class="muted">Sampadan is probing the local device for Tesseract.</span>
+            {/if}
+          </div>
+
+          <label class="field">
+            <span class="field-label">OCR Language</span>
+            <input
+              class="field-input"
+              bind:value={ocrLanguage}
+              list="ocr-language-list"
+              placeholder="eng or eng+hin"
+              disabled={busy}
+            />
+          </label>
+          <datalist id="ocr-language-list">
+            {#each ocrAvailableLanguages as language}
+              <option value={language}></option>
+            {/each}
+          </datalist>
+
+          <div class="tool-grid ocr-actions">
+            <button on:click={refreshOcrStatus} disabled={busy}>Refresh OCR</button>
+            <button on:click={ocrCurrentPage} disabled={busy || !workspace || !ocrReady}>OCR Page</button>
+            <button on:click={ocrWholeDocument} disabled={busy || !workspace || !ocrReady}>OCR Document</button>
+            <button on:click={exportOcrPreviewToFile} disabled={busy || !workspace || !ocrPreview}>
+              Export OCR Text
+            </button>
+          </div>
+        </div>
+
+        <div class="ocr-preview-shell">
+          <div class="section-head compact-head">
+            <h3>{ocrPreviewLabel}</h3>
+            <span class="pill">
+              {#if ocrLastDurationMs !== null}
+                Last page {ocrLastDurationMs} ms
+              {:else}
+                Idle
+              {/if}
+            </span>
+          </div>
+          <textarea
+            class="ocr-preview"
+            readonly
+            value={ocrPreview || 'Run OCR on the current page or the full document to preview extracted text here.'}
+          ></textarea>
+        </div>
+      </div>
     </section>
 
     {#if lastError}

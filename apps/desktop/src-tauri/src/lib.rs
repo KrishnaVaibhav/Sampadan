@@ -1,4 +1,5 @@
 mod commands;
+mod ocr;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -7,7 +8,9 @@ pub fn run() {
     .invoke_handler(tauri::generate_handler![
       commands::load_pdf,
       commands::inspect_pdf_bytes,
-      commands::save_file_bytes
+      commands::save_file_bytes,
+      commands::get_ocr_status,
+      commands::run_ocr_image
     ]);
 
   #[cfg(debug_assertions)]

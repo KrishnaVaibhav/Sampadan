@@ -27,7 +27,8 @@ The product target is:
 - Native layer: `Rust`
 - Viewer/rendering: `PDF.js`
 - PDF mutation today: `pdf-lib`
-- Native PDF pipeline planned: `qpdf`, `PDFium`, `Tesseract`
+- Native OCR today: local `Tesseract` runtime detection and invocation
+- Native PDF pipeline planned: `qpdf`, `PDFium`
 
 ## Repository Layout
 
@@ -95,6 +96,8 @@ Current commands:
 - `load_pdf`
 - `inspect_pdf_bytes`
 - `save_file_bytes`
+- `get_ocr_status`
+- `run_ocr_image`
 
 ### 4. Document Engine Layer
 
@@ -135,6 +138,14 @@ Planned split:
 2. Frontend sends bytes to Rust.
 3. Rust writes staged output to disk.
 4. UI reloads the saved path as the canonical workspace state.
+
+### OCR Document
+
+1. UI renders one page or the full document to local canvas images.
+2. Frontend sends PNG bytes plus requested language to Rust.
+3. Rust resolves the local Tesseract binary and available language data.
+4. Rust runs OCR on-device and returns extracted text to the UI.
+5. User can review the in-memory OCR preview and export it to a local text file.
 
 ## State Model
 
@@ -177,6 +188,8 @@ These are the modules the codebase should grow into instead of adding more logic
   PDF.js canvas rendering, thumbnails, and text extraction
 - `src/lib/operations/pdf-document.ts`
   merge, rotate, extract, reorder, split, metadata, and export helpers
+- `src/lib/ocr/ocr-client.ts`
+  OCR status probing and native OCR invocation bridge
 - `src/lib/conversion/`
   PNG export, image pipelines, later DOCX/HTML export adapters
 - `src/lib/components/`
@@ -186,6 +199,8 @@ These are the modules the codebase should grow into instead of adding more logic
 
 - `src-tauri/src/commands.rs`
   Tauri entry points only
+- `src-tauri/src/ocr.rs`
+  local Tesseract detection, language enumeration, and image OCR execution
 - `src-tauri/src/pdf/`
   document inspection and capability detection
 - `src-tauri/src/io/`
@@ -245,6 +260,14 @@ Status on March 18, 2026:
 - attachment inspection
 - encryption controls
 
+Status on March 18, 2026:
+
+- local page OCR implemented
+- full-document OCR preview implemented
+- OCR runtime detection and language listing implemented
+- searchable scan overlay still pending
+- signatures, attachments, and encryption controls still pending
+
 ### Milestone 4
 
 - PDF to image batch conversion
@@ -259,6 +282,7 @@ Status on March 18, 2026:
 - Windows builds can be validated locally on this machine
 - Linux and macOS builds should run in GitHub Actions matrix jobs
 - native dependencies must be bundled per platform and documented when added
+- Tesseract is currently discovered from the local machine rather than bundled into the app package
 
 ## Architectural Debt To Watch
 

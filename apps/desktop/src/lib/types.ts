@@ -36,6 +36,22 @@ export interface PageThumbnail {
   height: number
 }
 
+export interface OcrStatusPayload {
+  available: boolean
+  binaryPath: string | null
+  version: string | null
+  languages: string[]
+  recommendedLanguage: string | null
+  missingReason: string | null
+}
+
+export interface OcrTextResultPayload {
+  language: string
+  text: string
+  durationMs: number
+  sourceLabel: string
+}
+
 export interface WorkspaceDocument {
   path: string | null
   fileName: string
