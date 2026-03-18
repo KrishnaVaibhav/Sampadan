@@ -85,6 +85,69 @@ vi.mock('./lib/viewer/pdf-viewer', () => ({
     },
   ]),
   extractDocumentTextPages: vi.fn(async () => ['Page 1 text', 'Page 2 text', 'Page 3 text']),
+  extractDocumentTextLayout: vi.fn(async () => [
+    {
+      pageNumber: 1,
+      width: 595,
+      height: 842,
+      lines: [
+        {
+          id: 'layout-1-title',
+          pageNumber: 1,
+          text: 'Sample page 1',
+          xPercent: 12,
+          yPercent: 10,
+          widthPercent: 28,
+          heightPercent: 4,
+          fontSize: 26,
+        },
+        {
+          id: 'layout-1-body',
+          pageNumber: 1,
+          text: 'Body content for page 1',
+          xPercent: 12,
+          yPercent: 18,
+          widthPercent: 44,
+          heightPercent: 3.8,
+          fontSize: 14,
+        },
+      ],
+    },
+    {
+      pageNumber: 2,
+      width: 595,
+      height: 842,
+      lines: [
+        {
+          id: 'layout-2-title',
+          pageNumber: 2,
+          text: 'Sample page 2',
+          xPercent: 12,
+          yPercent: 10,
+          widthPercent: 28,
+          heightPercent: 4,
+          fontSize: 26,
+        },
+      ],
+    },
+    {
+      pageNumber: 3,
+      width: 595,
+      height: 842,
+      lines: [
+        {
+          id: 'layout-3-title',
+          pageNumber: 3,
+          text: 'Sample page 3',
+          xPercent: 12,
+          yPercent: 10,
+          widthPercent: 28,
+          heightPercent: 4,
+          fontSize: 26,
+        },
+      ],
+    },
+  ]),
   extractDocumentText: vi.fn(async () => 'Document text'),
 }))
 

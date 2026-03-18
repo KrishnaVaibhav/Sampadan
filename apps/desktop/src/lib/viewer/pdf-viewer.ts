@@ -1,4 +1,4 @@
-import type { PageThumbnail, PdfPageAnnotationOverlay, PdfPageTextSpan } from '../types'
+import type { PageThumbnail, PdfDocumentTextLayoutPage, PdfPageAnnotationOverlay, PdfPageTextSpan } from '../types'
 
 import { getPdfJs, type PdfProxy } from '../pdf-engine'
 
@@ -110,6 +110,87 @@ export async function extractPageTextSpans(
   pageNumber: number,
   scale: number,
 ): Promise<PdfPageTextSpan[]> {
+  const layout = await extractPageTextLayoutData(pdfProxy, pageNumber, scale)
+  return layout.lines
+}
+
+export async function extractDocumentTextLayout(
+  pdfProxy: PdfProxy,
+  scale = 1,
+): Promise<PdfDocumentTextLayoutPage[]> {
+  const pages: PdfDocumentTextLayoutPage[] = []
+
+  for (let pageNumber = 1; pageNumber <= pdfProxy.numPages; pageNumber += 1) {
+    pages.push(await extractPageTextLayoutData(pdfProxy, pageNumber, scale))
+  }
+
+  return pages
+}
+
+export async function extractPageAnnotations(
+  pdfProxy: PdfProxy,
+  pageNumber: number,
+  scale: number,
+): Promise<PdfPageAnnotationOverlay[]> {
+  const [{ Util }, page] = await Promise.all([getPdfJs(), pdfProxy.getPage(pageNumber)])
+  const viewport = page.getViewport({ scale })
+  const annotations = await page.getAnnotations()
+
+  const overlays = (annotations as Array<Record<string, unknown>>)
+    .map((annotation, index) => {
+      const kind = resolveAnnotationKind(annotation.subtype)
+      if (!kind) {
+        return null
+      }
+
+      const rectValues = toNumberList(annotation.rect)
+      if (rectValues.length < 4) {
+        return null
+      }
+
+      const rect = toPercentRect(convertPdfRectToViewportRect(viewport, Util, rectValues), viewport.width, viewport.height)
+      const quads =
+        kind === 'text'
+          ? []
+          : extractAnnotationQuads(annotation.quadPoints, viewport, Util).map((quad) =>
+              toPercentRect(quad, viewport.width, viewport.height),
+            )
+
+      return {
+        id: String(annotation.id ?? `${pageNumber}-${index}-${kind}`),
+        pageNumber,
+        kind,
+        xPercent: rect.xPercent,
+        yPercent: rect.yPercent,
+        widthPercent: rect.widthPercent,
+        heightPercent: rect.heightPercent,
+        quads,
+        contents: readAnnotationText(annotation.contentsObj),
+        title: readAnnotationText(annotation.titleObj) || null,
+        colorCss: resolveAnnotationColor(annotation.color, kind),
+        opacity:
+          typeof annotation.opacity === 'number' && Number.isFinite(annotation.opacity)
+            ? clampNumber(annotation.opacity, 0.12, 1)
+            : kind === 'highlight'
+              ? 0.28
+              : 1,
+      } satisfies PdfPageAnnotationOverlay
+    })
+    .filter((overlay): overlay is PdfPageAnnotationOverlay => Boolean(overlay))
+
+  page.cleanup()
+  return overlays
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value))
+}
+
+async function extractPageTextLayoutData(
+  pdfProxy: PdfProxy,
+  pageNumber: number,
+  scale: number,
+): Promise<PdfDocumentTextLayoutPage> {
   const [{ Util }, page] = await Promise.all([getPdfJs(), pdfProxy.getPage(pageNumber)])
   const viewport = page.getViewport({ scale })
   const content = await page.getTextContent()
@@ -227,66 +308,13 @@ export async function extractPageTextSpans(
 
   flushLine()
   page.cleanup()
-  return mergedSpans.filter((span) => span.widthPercent > 0.4 && span.heightPercent > 0.4)
-}
 
-export async function extractPageAnnotations(
-  pdfProxy: PdfProxy,
-  pageNumber: number,
-  scale: number,
-): Promise<PdfPageAnnotationOverlay[]> {
-  const [{ Util }, page] = await Promise.all([getPdfJs(), pdfProxy.getPage(pageNumber)])
-  const viewport = page.getViewport({ scale })
-  const annotations = await page.getAnnotations()
-
-  const overlays = (annotations as Array<Record<string, unknown>>)
-    .map((annotation, index) => {
-      const kind = resolveAnnotationKind(annotation.subtype)
-      if (!kind) {
-        return null
-      }
-
-      const rectValues = toNumberList(annotation.rect)
-      if (rectValues.length < 4) {
-        return null
-      }
-
-      const rect = toPercentRect(convertPdfRectToViewportRect(viewport, Util, rectValues), viewport.width, viewport.height)
-      const quads =
-        kind === 'text'
-          ? []
-          : extractAnnotationQuads(annotation.quadPoints, viewport, Util).map((quad) =>
-              toPercentRect(quad, viewport.width, viewport.height),
-            )
-
-      return {
-        id: String(annotation.id ?? `${pageNumber}-${index}-${kind}`),
-        pageNumber,
-        kind,
-        xPercent: rect.xPercent,
-        yPercent: rect.yPercent,
-        widthPercent: rect.widthPercent,
-        heightPercent: rect.heightPercent,
-        quads,
-        contents: readAnnotationText(annotation.contentsObj),
-        title: readAnnotationText(annotation.titleObj) || null,
-        colorCss: resolveAnnotationColor(annotation.color, kind),
-        opacity:
-          typeof annotation.opacity === 'number' && Number.isFinite(annotation.opacity)
-            ? clampNumber(annotation.opacity, 0.12, 1)
-            : kind === 'highlight'
-              ? 0.28
-              : 1,
-      } satisfies PdfPageAnnotationOverlay
-    })
-    .filter((overlay): overlay is PdfPageAnnotationOverlay => Boolean(overlay))
-
-  page.cleanup()
-  return overlays
-}
-
-function clampNumber(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value))
+  return {
+    pageNumber,
+    width: viewport.width,
+    height: viewport.height,
+    lines: mergedSpans.filter((span) => span.widthPercent > 0.4 && span.heightPercent > 0.4),
+  }
 }
 
 function resolveAnnotationKind(subtype: unknown) {

@@ -23,7 +23,7 @@ Current local features include:
 - split to single-page PDFs
 - add text watermarks, image stamps, sticky-note annotations, highlight/underline/strikeout annotations, current-page annotation inspection, in-place comment editing, and removal, review notes, free text blocks, text-targeted replacement edits, width-safe born-digital text rewrites for simple standard-font PDFs including split `Tj`/`TJ` runs and line-show text operators, whiteout-and-replace edits, and page numbers to the current page or the full document
 - read, fill, and flatten standard AcroForm text, checkbox, radio, dropdown, and option-list fields locally
-- export page PNGs, document text, Markdown, HTML, and DOCX
+- export page PNGs, document text, Markdown, layout-aware HTML, and layout-aware DOCX
 - run local OCR on the current page or a full document when Tesseract is installed
 - create searchable OCR PDF copies locally
 - inspect PDF signatures, attachments, and encryption signals

@@ -83,6 +83,7 @@
   } from './lib/types'
   import {
     extractDocumentText,
+    extractDocumentTextLayout,
     extractDocumentTextPages,
     extractPageAnnotations,
     extractPageTextSpans,
@@ -754,7 +755,8 @@
       cancelStatus: 'HTML export cancelled',
       errorStatus: 'Failed to export HTML',
       saveFilterName: 'HTML file',
-      buildBytes: (pages) => buildHtmlExport(workspace!.fileName, pages),
+      useLayout: true,
+      buildBytes: (pages, layoutPages) => buildHtmlExport(workspace!.fileName, pages, layoutPages),
     })
   }
 
@@ -766,7 +768,8 @@
       cancelStatus: 'DOCX export cancelled',
       errorStatus: 'Failed to export DOCX',
       saveFilterName: 'Word document',
-      buildBytes: (pages) => buildDocxExport(workspace!.fileName, pages),
+      useLayout: true,
+      buildBytes: (pages, layoutPages) => buildDocxExport(workspace!.fileName, pages, layoutPages),
     })
   }
 
@@ -777,7 +780,8 @@
     cancelStatus: string
     errorStatus: string
     saveFilterName: string
-    buildBytes: (pages: string[]) => Uint8Array | Promise<Uint8Array>
+    useLayout?: boolean
+    buildBytes: (pages: string[], layoutPages?: Awaited<ReturnType<typeof extractDocumentTextLayout>>) => Uint8Array | Promise<Uint8Array>
   }) {
     if (!workspace || !pdfProxy || busy) return
 
@@ -788,6 +792,7 @@
 
     try {
       const pages = await extractDocumentTextPages(pdfProxy)
+      const layoutPages = options.useLayout ? await extractDocumentTextLayout(pdfProxy) : undefined
       const targetPath = await saveDialog({
         defaultPath: withExtension(workspace.fileName, options.extension),
         filters: [{ name: options.saveFilterName, extensions: [options.extension] }],
@@ -799,7 +804,7 @@
         return
       }
 
-      const bytes = await options.buildBytes(pages)
+      const bytes = await options.buildBytes(pages, layoutPages)
       await invoke('save_file_bytes', {
         path: targetPath,
         bytesBase64: bytesToBase64(bytes),
