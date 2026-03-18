@@ -111,7 +111,7 @@ export async function extractPageTextSpans(
   scale: number,
 ): Promise<PdfPageTextSpan[]> {
   const layout = await extractPageTextLayoutData(pdfProxy, pageNumber, scale)
-  return layout.lines
+  return layout.targets ?? layout.lines
 }
 
 export async function extractDocumentTextLayout(
@@ -184,6 +184,77 @@ export async function extractPageAnnotations(
 
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
+}
+
+export function buildPdfPageTextTargets(
+  rawSpans: Array<{
+    id: string
+    text: string
+    left: number
+    top: number
+    right: number
+    bottom: number
+    fontSize: number
+  }>,
+  pageNumber: number,
+  pageWidth: number,
+  pageHeight: number,
+): PdfPageTextSpan[] {
+  const targets: PdfPageTextSpan[] = []
+
+  for (const span of rawSpans) {
+    const normalizedText = span.text.replace(/\s+/g, ' ').trim()
+    if (!normalizedText) {
+      continue
+    }
+
+    const spanWidth = Math.max(span.right - span.left, 1)
+    const spanHeight = Math.max(span.bottom - span.top, 1)
+    const totalUnits = Math.max(normalizedText.length, 1)
+    const words = normalizedText.match(/\S+/g) ?? []
+
+    if (words.length <= 1) {
+      targets.push({
+        id: span.id,
+        pageNumber,
+        text: normalizedText,
+        xPercent: (span.left / pageWidth) * 100,
+        yPercent: (span.top / pageHeight) * 100,
+        widthPercent: (spanWidth / pageWidth) * 100,
+        heightPercent: (spanHeight / pageHeight) * 100,
+        fontSize: span.fontSize,
+      })
+      continue
+    }
+
+    let searchStart = 0
+    for (let wordIndex = 0; wordIndex < words.length; wordIndex += 1) {
+      const word = words[wordIndex]
+      const wordStart = normalizedText.indexOf(word, searchStart)
+      if (wordStart < 0) {
+        continue
+      }
+
+      const wordEnd = wordStart + word.length
+      const left = span.left + (wordStart / totalUnits) * spanWidth
+      const right = wordIndex === words.length - 1 ? span.right : span.left + (wordEnd / totalUnits) * spanWidth
+
+      targets.push({
+        id: `${span.id}-word-${wordIndex}`,
+        pageNumber,
+        text: word,
+        xPercent: (left / pageWidth) * 100,
+        yPercent: (span.top / pageHeight) * 100,
+        widthPercent: ((right - left) / pageWidth) * 100,
+        heightPercent: (spanHeight / pageHeight) * 100,
+        fontSize: span.fontSize,
+      })
+
+      searchStart = wordEnd
+    }
+  }
+
+  return targets.filter((span) => span.widthPercent > 0.25 && span.heightPercent > 0.25)
 }
 
 async function extractPageTextLayoutData(
@@ -309,11 +380,14 @@ async function extractPageTextLayoutData(
   flushLine()
   page.cleanup()
 
+  const textTargets = buildPdfPageTextTargets(rawSpans, pageNumber, viewport.width, viewport.height)
+
   return {
     pageNumber,
     width: viewport.width,
     height: viewport.height,
     lines: mergedSpans.filter((span) => span.widthPercent > 0.4 && span.heightPercent > 0.4),
+    targets: textTargets,
   }
 }
 

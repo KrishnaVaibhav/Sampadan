@@ -189,6 +189,7 @@ export interface PdfDocumentTextLayoutPage {
   width: number
   height: number
   lines: PdfPageTextSpan[]
+  targets?: PdfPageTextSpan[]
 }
 
 export type PdfPageAnnotationKind = 'text' | 'highlight' | 'underline' | 'strikeout'

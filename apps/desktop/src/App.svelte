@@ -2296,6 +2296,81 @@
     } satisfies TextTargetRegion
   }
 
+  function snapCoordinateToTextTargets(value: number, candidates: number[], threshold: number) {
+    let snappedValue = value
+    let closestDistance = threshold + Number.EPSILON
+
+    for (const candidate of candidates) {
+      const distance = Math.abs(candidate - value)
+      if (distance <= closestDistance) {
+        snappedValue = candidate
+        closestDistance = distance
+      }
+    }
+
+    return snappedValue
+  }
+
+  function snapTextTargetRegion(region: TextTargetRegion, handle: TextTargetRegionHandle) {
+    const normalizedRegion = normalizeTextTargetRegion(region)
+    if (currentPageTextSpans.length === 0) {
+      return normalizedRegion
+    }
+
+    const xBoundaries = Array.from(
+      new Set(
+        currentPageTextSpans
+          .flatMap((span) => [span.xPercent, span.xPercent + span.widthPercent])
+          .map((value) => Number(value.toFixed(2))),
+      ),
+    )
+    const yBoundaries = Array.from(
+      new Set(
+        currentPageTextSpans
+          .flatMap((span) => [span.yPercent, span.yPercent + span.heightPercent])
+          .map((value) => Number(value.toFixed(2))),
+      ),
+    )
+    const snapThreshold = handle === 'move' ? 0.85 : 1.15
+
+    if (handle === 'move') {
+      return normalizeTextTargetRegion({
+        ...normalizedRegion,
+        xPercent: snapCoordinateToTextTargets(normalizedRegion.xPercent, xBoundaries, snapThreshold),
+        yPercent: snapCoordinateToTextTargets(normalizedRegion.yPercent, yBoundaries, snapThreshold),
+      })
+    }
+
+    let left = normalizedRegion.xPercent
+    let top = normalizedRegion.yPercent
+    let right = normalizedRegion.xPercent + normalizedRegion.widthPercent
+    let bottom = normalizedRegion.yPercent + normalizedRegion.heightPercent
+
+    if (handle.includes('w')) {
+      left = snapCoordinateToTextTargets(left, xBoundaries, snapThreshold)
+    }
+
+    if (handle.includes('e')) {
+      right = snapCoordinateToTextTargets(right, xBoundaries, snapThreshold)
+    }
+
+    if (handle.includes('n')) {
+      top = snapCoordinateToTextTargets(top, yBoundaries, snapThreshold)
+    }
+
+    if (handle.includes('s')) {
+      bottom = snapCoordinateToTextTargets(bottom, yBoundaries, snapThreshold)
+    }
+
+    return normalizeTextTargetRegion({
+      xPercent: left,
+      yPercent: top,
+      widthPercent: right - left,
+      heightPercent: bottom - top,
+      fontSize: normalizedRegion.fontSize,
+    })
+  }
+
   function applyTextEditRegion(region: TextTargetRegion) {
     const normalizedRegion = normalizeTextTargetRegion(region)
     textEditX = normalizedRegion.xPercent.toFixed(2)
@@ -2557,13 +2632,18 @@
     const deltaYPercent = ((clientY - startClientY) / surfaceHeight) * 100
 
     if (handle === 'move') {
-      applyTextEditRegion({
+      applyTextEditRegion(
+        snapTextTargetRegion(
+          {
         xPercent: clamp(startRegion.xPercent + deltaXPercent, 0, 100 - startRegion.widthPercent),
         yPercent: clamp(startRegion.yPercent + deltaYPercent, 0, 100 - startRegion.heightPercent),
         widthPercent: startRegion.widthPercent,
         heightPercent: startRegion.heightPercent,
         fontSize: startRegion.fontSize,
-      })
+          },
+          handle,
+        ),
+      )
       return
     }
 
@@ -2604,13 +2684,18 @@
       bottom = clamp(bottom, top + minimumHeight, 100)
     }
 
-    applyTextEditRegion({
-      xPercent: left,
-      yPercent: top,
-      widthPercent: right - left,
-      heightPercent: bottom - top,
-      fontSize: startRegion.fontSize,
-    })
+    applyTextEditRegion(
+      snapTextTargetRegion(
+        {
+          xPercent: left,
+          yPercent: top,
+          widthPercent: right - left,
+          heightPercent: bottom - top,
+          fontSize: startRegion.fontSize,
+        },
+        handle,
+      ),
+    )
   }
 
   function handlePageDragStart(pageNumber: number, event: DragEvent) {

@@ -51,12 +51,32 @@ vi.mock('./lib/viewer/pdf-viewer', () => ({
   ]),
   extractPageTextSpans: vi.fn(async (_pdfProxy, pageNumber: number) => [
     {
-      id: `target-${pageNumber}`,
+      id: `target-${pageNumber}-page`,
       pageNumber,
-      text: `Page ${pageNumber} line`,
+      text: 'Page',
       xPercent: 12,
       yPercent: 14,
-      widthPercent: 24,
+      widthPercent: 8,
+      heightPercent: 4,
+      fontSize: 16,
+    },
+    {
+      id: `target-${pageNumber}-number`,
+      pageNumber,
+      text: String(pageNumber),
+      xPercent: 20.4,
+      yPercent: 14,
+      widthPercent: 4.2,
+      heightPercent: 4,
+      fontSize: 16,
+    },
+    {
+      id: `target-${pageNumber}-line`,
+      pageNumber,
+      text: 'line',
+      xPercent: 25.2,
+      yPercent: 14,
+      widthPercent: 10.8,
       heightPercent: 4,
       fontSize: 16,
     },
@@ -846,10 +866,10 @@ describe('Sampadan desktop app regression suite', () => {
 
     await user.click(screen.getByTestId('toggle-text-target-button'))
     await waitFor(() => {
-      expect(screen.getByLabelText('Target text: Page 1 line')).toBeTruthy()
+      expect(screen.getByLabelText('Target text: Page')).toBeTruthy()
     })
 
-    await user.click(screen.getByLabelText('Target text: Page 1 line'))
+    await user.click(screen.getByLabelText('Target text: Page'))
     await waitFor(() => {
       expect(screen.getByTestId('inline-text-editor-card')).toBeTruthy()
     })
@@ -889,10 +909,10 @@ describe('Sampadan desktop app regression suite', () => {
 
     await user.click(screen.getByTestId('toggle-text-target-button'))
     await waitFor(() => {
-      expect(screen.getByLabelText('Target text: Page 1 line')).toBeTruthy()
+      expect(screen.getByLabelText('Target text: Page')).toBeTruthy()
     })
 
-    await user.click(screen.getByLabelText('Target text: Page 1 line'))
+    await user.click(screen.getByLabelText('Target text: Page'))
     await waitFor(() => {
       expect(screen.getByTestId('text-target-region-frame')).toBeTruthy()
     })
@@ -900,20 +920,20 @@ describe('Sampadan desktop app regression suite', () => {
     const widthInput = screen.getByLabelText('Width %') as HTMLInputElement
     const heightInput = screen.getByLabelText('Height %') as HTMLInputElement
 
-    expect(Number.parseFloat(widthInput.value)).toBeCloseTo(24, 2)
+    expect(Number.parseFloat(widthInput.value)).toBeCloseTo(8, 2)
     expect(Number.parseFloat(heightInput.value)).toBeCloseTo(5, 2)
 
     await fireEvent.pointerDown(screen.getByTestId('text-target-handle-se'), {
-      clientX: 288,
+      clientX: 160,
       clientY: 190,
     })
     await fireEvent.pointerMove(window, {
-      clientX: 376,
+      clientX: 284,
       clientY: 260,
     })
     await fireEvent.pointerUp(window)
 
-    expect(Number.parseFloat(widthInput.value)).toBeGreaterThan(24)
+    expect(Number.parseFloat(widthInput.value)).toBeCloseTo(24, 1)
     expect(Number.parseFloat(heightInput.value)).toBeGreaterThan(5)
   })
 
@@ -930,10 +950,10 @@ describe('Sampadan desktop app regression suite', () => {
 
     await user.click(screen.getByTestId('toggle-text-target-button'))
     await waitFor(() => {
-      expect(screen.getByLabelText('Target text: Page 1 line')).toBeTruthy()
+      expect(screen.getByLabelText('Target text: Page')).toBeTruthy()
     })
 
-    await user.click(screen.getByLabelText('Target text: Page 1 line'))
+    await user.click(screen.getByLabelText('Target text: Page'))
     await user.clear(screen.getByLabelText('Note Text'))
     await user.type(screen.getByLabelText('Note Text'), 'Review this sentence.')
     await user.click(screen.getByTestId('highlight-selected-text-button'))
