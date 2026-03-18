@@ -10,7 +10,8 @@ pub fn run() {
       commands::inspect_pdf_bytes,
       commands::save_file_bytes,
       commands::get_ocr_status,
-      commands::run_ocr_image
+      commands::run_ocr_image,
+      commands::run_ocr_pdf
     ]);
 
   #[cfg(debug_assertions)]

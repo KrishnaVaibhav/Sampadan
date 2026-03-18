@@ -98,6 +98,7 @@ Current commands:
 - `save_file_bytes`
 - `get_ocr_status`
 - `run_ocr_image`
+- `run_ocr_pdf`
 
 ### 4. Document Engine Layer
 
@@ -144,8 +145,9 @@ Planned split:
 1. UI renders one page or the full document to local canvas images.
 2. Frontend sends PNG bytes plus requested language to Rust.
 3. Rust resolves the local Tesseract binary and available language data.
-4. Rust runs OCR on-device and returns extracted text to the UI.
-5. User can review the in-memory OCR preview and export it to a local text file.
+4. Rust runs OCR on-device and returns either extracted text or a searchable PDF page.
+5. Frontend can review text in memory or merge page-level OCR PDFs into a generated searchable copy.
+6. User exports the OCR text or saves the searchable PDF copy explicitly.
 
 ## State Model
 
@@ -189,7 +191,7 @@ These are the modules the codebase should grow into instead of adding more logic
 - `src/lib/operations/pdf-document.ts`
   merge, rotate, extract, reorder, split, metadata, and export helpers
 - `src/lib/ocr/ocr-client.ts`
-  OCR status probing and native OCR invocation bridge
+  OCR status probing and native OCR text/PDF invocation bridge
 - `src/lib/conversion/`
   PNG export, image pipelines, later DOCX/HTML export adapters
 - `src/lib/components/`
@@ -200,7 +202,7 @@ These are the modules the codebase should grow into instead of adding more logic
 - `src-tauri/src/commands.rs`
   Tauri entry points only
 - `src-tauri/src/ocr.rs`
-  local Tesseract detection, language enumeration, and image OCR execution
+  local Tesseract detection, language enumeration, and image OCR text/PDF execution
 - `src-tauri/src/pdf/`
   document inspection and capability detection
 - `src-tauri/src/io/`
@@ -265,7 +267,7 @@ Status on March 18, 2026:
 - local page OCR implemented
 - full-document OCR preview implemented
 - OCR runtime detection and language listing implemented
-- searchable scan overlay still pending
+- searchable OCR PDF copy generation implemented
 - signatures, attachments, and encryption controls still pending
 
 ### Milestone 4

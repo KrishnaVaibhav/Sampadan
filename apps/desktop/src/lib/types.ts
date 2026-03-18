@@ -52,6 +52,13 @@ export interface OcrTextResultPayload {
   sourceLabel: string
 }
 
+export interface OcrPdfResultPayload {
+  language: string
+  bytesBase64: string
+  durationMs: number
+  sourceLabel: string
+}
+
 export interface WorkspaceDocument {
   path: string | null
   fileName: string

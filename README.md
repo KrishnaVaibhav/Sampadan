@@ -21,6 +21,7 @@ Current local features include:
 - split to single-page PDFs
 - export page PNGs and document text
 - run local OCR on the current page or a full document when Tesseract is installed
+- create searchable OCR PDF copies locally
 - metadata inspection and editing
 
 ## Architecture

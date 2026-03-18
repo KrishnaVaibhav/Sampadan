@@ -33,6 +33,15 @@ pub struct LoadedPdf {
   flags: PdfFlags,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrPdfResult {
+  language: String,
+  bytes_base64: String,
+  duration_ms: u128,
+  source_label: String,
+}
+
 #[tauri::command]
 pub fn load_pdf(path: String) -> Result<LoadedPdf, String> {
   let path_buf = PathBuf::from(&path);
@@ -112,6 +121,27 @@ pub fn run_ocr_image(
 
   let resolved_label = source_label.unwrap_or_else(|| "page-preview".to_string());
   ocr::run_ocr_image(&bytes, language.as_deref(), &resolved_label)
+}
+
+#[tauri::command]
+pub fn run_ocr_pdf(
+  bytes_base64: String,
+  language: Option<String>,
+  source_label: Option<String>,
+) -> Result<OcrPdfResult, String> {
+  let bytes = STANDARD
+    .decode(bytes_base64)
+    .map_err(|error| format!("Failed to decode OCR image bytes: {error}"))?;
+
+  let resolved_label = source_label.unwrap_or_else(|| "page-searchable-pdf".to_string());
+  let result = ocr::run_ocr_pdf(&bytes, language.as_deref(), &resolved_label)?;
+
+  Ok(OcrPdfResult {
+    language: result.language,
+    bytes_base64: STANDARD.encode(&result.pdf_bytes),
+    duration_ms: result.duration_ms,
+    source_label: result.source_label,
+  })
 }
 
 fn build_loaded_pdf(

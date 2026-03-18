@@ -3,7 +3,7 @@ use std::{
   env,
   fs,
   path::{Path, PathBuf},
-  process::Command,
+  process::{Command, Output},
   time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -23,6 +23,14 @@ pub struct OcrStatus {
 pub struct OcrTextResult {
   pub language: String,
   pub text: String,
+  pub duration_ms: u128,
+  pub source_label: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct OcrPdfResultBytes {
+  pub language: String,
+  pub pdf_bytes: Vec<u8>,
   pub duration_ms: u128,
   pub source_label: String,
 }
@@ -90,17 +98,7 @@ pub fn run_ocr_image(
   let _ = fs::remove_file(&temp_image_path);
 
   if !output.status.success() {
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let detail = if !stderr.is_empty() {
-      stderr
-    } else if !stdout.is_empty() {
-      stdout
-    } else {
-      "Tesseract exited without returning output.".to_string()
-    };
-
-    return Err(format!("OCR failed: {detail}"));
+    return Err(format!("OCR failed: {}", describe_ocr_failure(&output)));
   }
 
   let text = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
@@ -108,6 +106,66 @@ pub fn run_ocr_image(
   Ok(OcrTextResult {
     language: selected_language,
     text: text.trim().to_string(),
+    duration_ms: start.elapsed().as_millis(),
+    source_label: source_label.to_string(),
+  })
+}
+
+pub fn run_ocr_pdf(
+  bytes: &[u8],
+  language: Option<&str>,
+  source_label: &str,
+) -> Result<OcrPdfResultBytes, String> {
+  let tesseract = resolve_tesseract()?;
+  let languages = list_languages(&tesseract.command).unwrap_or_default();
+  let selected_language = resolve_language(language, &languages)?;
+  let temp_image_path = build_temp_image_path();
+  let temp_output_base = build_temp_output_base();
+  let temp_pdf_path = temp_output_base.with_extension("pdf");
+
+  fs::write(&temp_image_path, bytes).map_err(|error| {
+    format!(
+      "Failed to write OCR input image {}: {error}",
+      temp_image_path.display()
+    )
+  })?;
+
+  let start = Instant::now();
+  let output = Command::new(&tesseract.command)
+    .arg(&temp_image_path)
+    .arg(&temp_output_base)
+    .arg("-l")
+    .arg(&selected_language)
+    .arg("--dpi")
+    .arg("300")
+    .arg("pdf")
+    .output()
+    .map_err(|error| format!("Failed to launch Tesseract: {error}"))?;
+
+  if !output.status.success() {
+    remove_if_exists(&temp_image_path);
+    remove_if_exists(&temp_pdf_path);
+    return Err(format!("Searchable OCR PDF generation failed: {}", describe_ocr_failure(&output)));
+  }
+
+  let pdf_bytes = match fs::read(&temp_pdf_path) {
+    Ok(bytes) => bytes,
+    Err(error) => {
+      remove_if_exists(&temp_image_path);
+      remove_if_exists(&temp_pdf_path);
+      return Err(format!(
+        "Tesseract completed, but Sampadan could not read the generated PDF {}: {error}",
+        temp_pdf_path.display()
+      ));
+    }
+  };
+
+  remove_if_exists(&temp_image_path);
+  remove_if_exists(&temp_pdf_path);
+
+  Ok(OcrPdfResultBytes {
+    language: selected_language,
+    pdf_bytes,
     duration_ms: start.elapsed().as_millis(),
     source_label: source_label.to_string(),
   })
@@ -215,12 +273,43 @@ fn recommend_language(installed_languages: &[String]) -> Option<String> {
 }
 
 fn build_temp_image_path() -> PathBuf {
+  let stamp = build_temp_stamp();
+  env::temp_dir().join(format!("sampadan-ocr-input-{stamp}.png"))
+}
+
+fn build_temp_output_base() -> PathBuf {
+  let stamp = build_temp_stamp();
+  env::temp_dir().join(format!("sampadan-ocr-output-{stamp}"))
+}
+
+fn build_temp_stamp() -> String {
   let timestamp = SystemTime::now()
     .duration_since(UNIX_EPOCH)
-    .map(|duration| duration.as_millis())
+    .map(|duration| duration.as_nanos())
     .unwrap_or_default();
   let process_id = std::process::id();
-  env::temp_dir().join(format!("sampadan-ocr-{timestamp}-{process_id}.png"))
+  format!("{timestamp}-{process_id}")
+}
+
+fn describe_ocr_failure(output: &Output) -> String {
+  let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+  let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+  if !stderr.is_empty() {
+    return stderr;
+  }
+
+  if !stdout.is_empty() {
+    return stdout;
+  }
+
+  "Tesseract exited without returning output.".to_string()
+}
+
+fn remove_if_exists(path: &Path) {
+  if path.exists() {
+    let _ = fs::remove_file(path);
+  }
 }
 
 fn common_tesseract_locations() -> Vec<PathBuf> {

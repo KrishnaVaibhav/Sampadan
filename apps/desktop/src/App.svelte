@@ -3,7 +3,7 @@
   import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
   import { onMount, tick } from 'svelte'
 
-  import { fetchOcrStatus, runOcrForBlob } from './lib/ocr/ocr-client'
+  import { fetchOcrStatus, runOcrForBlob, runOcrPdfForBlob } from './lib/ocr/ocr-client'
   import { type PdfProxy, loadPdfProxy } from './lib/pdf-engine'
   import {
     applyMetadataToDocument,
@@ -72,15 +72,16 @@
         'Split documents into single-page PDFs',
         'Export page PNGs and full-document text',
         'Run local OCR on the current page or full document',
+        'Create searchable OCR PDF copies',
       ],
     },
     {
       title: 'Queued Next',
       items: [
-        'Searchable scan overlay output',
         'Annotations and comments',
         'AcroForm editing',
         'Signature validation',
+        'Encryption controls',
       ],
     },
   ]
@@ -577,7 +578,7 @@
     lastError = null
 
     try {
-      const blob = await renderPageBlob(currentPage, Math.max(zoom, 2.4))
+      const blob = await renderPageBlob(currentPage, getOcrRenderScale())
       const result = await runOcrForBlob(blob, {
         language,
         sourceLabel: `${workspace.fileName} page ${currentPage}`,
@@ -616,7 +617,7 @@
       for (let pageNumber = 1; pageNumber <= workspace.pageCount; pageNumber += 1) {
         status = `Running OCR on page ${pageNumber} of ${workspace.pageCount}`
 
-        const blob = await renderPageBlob(pageNumber, 2.4)
+        const blob = await renderPageBlob(pageNumber, getOcrRenderScale())
         const result = await runOcrForBlob(blob, {
           language,
           sourceLabel: `${workspace.fileName} page ${pageNumber}`,
@@ -672,6 +673,54 @@
       status = `Exported ${fileNameFromPath(targetPath)}`
     } catch (error) {
       reportError(error, 'Failed to export OCR text')
+    } finally {
+      busy = false
+    }
+  }
+
+  async function createSearchableCopy() {
+    if (!workspace || !pdfProxy || busy) return
+
+    const language = resolveOcrLanguage()
+    if (!ocrReady) {
+      reportError(ocrStatus?.missingReason ?? 'Install Tesseract to enable local OCR.', 'OCR is unavailable')
+      return
+    }
+
+    busy = true
+    statusTone = 'busy'
+    status = `Creating searchable PDF from ${workspace.pageCount} pages`
+    lastError = null
+
+    try {
+      const searchablePages: Uint8Array[] = []
+
+      for (let pageNumber = 1; pageNumber <= workspace.pageCount; pageNumber += 1) {
+        status = `Creating searchable page ${pageNumber} of ${workspace.pageCount}`
+
+        const blob = await renderPageBlob(pageNumber, getOcrRenderScale())
+        const result = await runOcrPdfForBlob(blob, {
+          language,
+          sourceLabel: `${workspace.fileName} searchable page ${pageNumber}`,
+        })
+
+        searchablePages.push(base64ToBytes(result.bytesBase64))
+        ocrLanguage = result.language
+        ocrLastDurationMs = result.durationMs
+        ocrPreviewLabel = `Searchable OCR generation ${pageNumber}/${workspace.pageCount}`
+        await tick()
+      }
+
+      const mergedBytes = await mergeDocuments(searchablePages)
+      await commitGeneratedPdf(mergedBytes, {
+        fileName: `${withoutExtension(workspace.fileName)}-searchable.pdf`,
+        current: currentPage,
+      })
+
+      statusTone = 'idle'
+      status = `Created searchable copy for ${workspace.fileName}`
+    } catch (error) {
+      reportError(error, 'Failed to create a searchable PDF copy')
     } finally {
       busy = false
     }
@@ -903,6 +952,11 @@
     }
 
     return ocrStatus?.recommendedLanguage ?? 'eng'
+  }
+
+  function getOcrRenderScale() {
+    const outputScale = window.devicePixelRatio || 1
+    return 300 / 72 / outputScale
   }
 
   function buildOcrPreview(results: Array<{ pageNumber: number; text: string }>) {
@@ -1213,6 +1267,7 @@
             <span class="meta-label">Suggested exports</span>
             <div class="export-list">
               <span>{withExtension(workspace.fileName, '.pdf')}</span>
+              <span>{`${withoutExtension(workspace.fileName)}-searchable.pdf`}</span>
               <span>{withExtension(workspace.fileName, '.png')}</span>
               <span>{withExtension(workspace.fileName, '.txt')}</span>
               <span>{`${withoutExtension(workspace.fileName)}-ocr.txt`}</span>
@@ -1236,6 +1291,7 @@
               <span>Edits: pdf-lib operation layer</span>
               <span>File IO: Rust + Tauri</span>
               <span>OCR: {ocrReady ? `Tesseract ${ocrStatus?.version ?? 'ready'}` : 'Install local Tesseract'}</span>
+              <span>Searchable OCR PDF: local generated copy</span>
               <span>Signatures: next local milestone</span>
             </div>
           </div>
@@ -1259,7 +1315,7 @@
           <span class="eyebrow">Local OCR</span>
           <h2>OCR Workbench</h2>
         </div>
-        <span class:busy-pill={busy && status.startsWith('Running OCR')} class="status-pill">
+        <span class:busy-pill={busy && (status.includes('OCR') || status.includes('searchable'))} class="status-pill">
           {ocrReady ? 'Ready' : 'Unavailable'}
         </span>
       </div>
@@ -1278,7 +1334,7 @@
               <span class="muted">{ocrStatus.binaryPath ?? ocrStatus.missingReason ?? 'Unknown OCR state'}</span>
               <span class="muted">
                 {#if ocrReady}
-                  {ocrStatus.version ?? 'Version unknown'} • {ocrAvailableLanguages.length} language{ocrAvailableLanguages.length === 1 ? '' : 's'}
+                  {ocrStatus.version ?? 'Version unknown'} - {ocrAvailableLanguages.length} language{ocrAvailableLanguages.length === 1 ? '' : 's'}
                 {:else}
                   Install Tesseract locally to enable page and full-document OCR.
                 {/if}
@@ -1309,6 +1365,9 @@
             <button on:click={refreshOcrStatus} disabled={busy}>Refresh OCR</button>
             <button on:click={ocrCurrentPage} disabled={busy || !workspace || !ocrReady}>OCR Page</button>
             <button on:click={ocrWholeDocument} disabled={busy || !workspace || !ocrReady}>OCR Document</button>
+            <button on:click={createSearchableCopy} disabled={busy || !workspace || !ocrReady}>
+              Searchable PDF
+            </button>
             <button on:click={exportOcrPreviewToFile} disabled={busy || !workspace || !ocrPreview}>
               Export OCR Text
             </button>
