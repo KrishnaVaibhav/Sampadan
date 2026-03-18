@@ -178,8 +178,30 @@
     path: string | null
   }
 
+  type TextTargetRegionHandle = 'move' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'nw'
+
+  type TextTargetRegion = {
+    xPercent: number
+    yPercent: number
+    widthPercent: number
+    heightPercent: number
+    fontSize: number
+  }
+
+  type TextTargetDragSession = {
+    handle: TextTargetRegionHandle
+    startClientX: number
+    startClientY: number
+    surfaceWidth: number
+    surfaceHeight: number
+    startRegion: TextTargetRegion
+  }
+
+  const textTargetRegionHandles: TextTargetRegionHandle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
+
   let viewerCanvas: HTMLCanvasElement | null = null
   let viewerPane: HTMLDivElement | null = null
+  let viewerSurface: HTMLDivElement | null = null
   let pdfProxy: PdfProxy | null = null
   let workspace: WorkspaceDocument | null = null
   let renderedPageWidth = 0
@@ -208,6 +230,7 @@
   let textTargetMode = false
   let inlineTextEditorOpen = false
   let inlineTextEditor: HTMLTextAreaElement | null = null
+  let textTargetDragSession: TextTargetDragSession | null = null
   let rangeExpression = '1'
   let metadataDraft = emptyMetadata()
   let metadataDirty = false
@@ -323,10 +346,26 @@
       }
     }
 
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!textTargetDragSession) return
+
+      event.preventDefault()
+      updateDraggedTextTargetRegion(event.clientX, event.clientY)
+    }
+
+    const handlePointerUp = () => {
+      if (!textTargetDragSession) return
+      textTargetDragSession = null
+    }
+
     window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp)
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
       void pdfProxy?.destroy()
     }
   })
@@ -1563,6 +1602,10 @@
     }
 
     const currentWorkspace = workspace
+    const targetRegion = resolveSelectedTextTargetRegion()
+    if (!targetRegion) {
+      return
+    }
     const normalizedSelectedText = selectedTextSpan.text.replace(/\s+/g, ' ').trim()
     const selectedTextOccurrence = Math.max(
       0,
@@ -1582,11 +1625,11 @@
         replacementText,
         pageIndex: currentPage - 1,
         targetOccurrence: selectedTextOccurrence,
-        xPercent: selectedTextSpan.xPercent,
-        yPercent: selectedTextSpan.yPercent,
-        widthPercent: selectedTextSpan.widthPercent,
-        heightPercent: selectedTextSpan.heightPercent,
-        fontSize: selectedTextSpan.fontSize,
+        xPercent: targetRegion.xPercent,
+        yPercent: targetRegion.yPercent,
+        widthPercent: targetRegion.widthPercent,
+        heightPercent: targetRegion.heightPercent,
+        fontSize: targetRegion.fontSize,
         alignment: textEditAlignment,
       })
 
@@ -1612,6 +1655,10 @@
     if (!workspace || busy || !selectedTextSpan) return
 
     const currentWorkspace = workspace
+    const targetRegion = resolveSelectedTextTargetRegion()
+    if (!targetRegion) {
+      return
+    }
     const kindLabel = kind === 'strikeout' ? 'strikeout' : kind
 
     await runDocumentMutation({
@@ -1623,10 +1670,10 @@
         addTextMarkupAnnotationToDocument(currentWorkspace.bytes, {
           kind,
           pageIndex: currentPage - 1,
-          xPercent: selectedTextSpan.xPercent,
-          yPercent: selectedTextSpan.yPercent,
-          widthPercent: selectedTextSpan.widthPercent,
-          heightPercent: selectedTextSpan.heightPercent,
+          xPercent: targetRegion.xPercent,
+          yPercent: targetRegion.yPercent,
+          widthPercent: targetRegion.widthPercent,
+          heightPercent: targetRegion.heightPercent,
           title: reviewNoteTitle.trim() || 'Sampadan',
           contents: reviewNoteBody.trim(),
         }),
@@ -2227,6 +2274,81 @@
     return parsed
   }
 
+  function parseLooseBoundedNumber(value: string | number, min: number, max: number) {
+    const parsed = typeof value === 'number' ? value : Number.parseFloat(value)
+    if (!Number.isFinite(parsed)) {
+      return null
+    }
+
+    return clamp(parsed, min, max)
+  }
+
+  function normalizeTextTargetRegion(region: TextTargetRegion) {
+    const widthPercent = clamp(region.widthPercent, 5, 100)
+    const heightPercent = clamp(region.heightPercent, 5, 100)
+
+    return {
+      xPercent: clamp(region.xPercent, 0, 100 - widthPercent),
+      yPercent: clamp(region.yPercent, 0, 100 - heightPercent),
+      widthPercent,
+      heightPercent,
+      fontSize: clamp(region.fontSize, 8, 72),
+    } satisfies TextTargetRegion
+  }
+
+  function applyTextEditRegion(region: TextTargetRegion) {
+    const normalizedRegion = normalizeTextTargetRegion(region)
+    textEditX = normalizedRegion.xPercent.toFixed(2)
+    textEditY = normalizedRegion.yPercent.toFixed(2)
+    textEditWidth = normalizedRegion.widthPercent.toFixed(2)
+    textEditHeight = normalizedRegion.heightPercent.toFixed(2)
+    textEditFontSize = Math.round(normalizedRegion.fontSize).toString()
+  }
+
+  function resolveSelectedTextTargetRegionPreview() {
+    if (!selectedTextSpan) {
+      return null
+    }
+
+    return normalizeTextTargetRegion({
+      xPercent: parseLooseBoundedNumber(textEditX, 0, 95) ?? selectedTextSpan.xPercent,
+      yPercent: parseLooseBoundedNumber(textEditY, 0, 95) ?? selectedTextSpan.yPercent,
+      widthPercent: parseLooseBoundedNumber(textEditWidth, 5, 100) ?? Math.max(selectedTextSpan.widthPercent, 5),
+      heightPercent: parseLooseBoundedNumber(textEditHeight, 5, 100) ?? Math.max(selectedTextSpan.heightPercent, 5),
+      fontSize: parseLooseBoundedNumber(textEditFontSize, 8, 72) ?? selectedTextSpan.fontSize,
+    })
+  }
+
+  function resolveSelectedTextTargetRegion() {
+    if (!selectedTextSpan) {
+      return null
+    }
+
+    const xPercent = parseBoundedNumber(textEditX, 'Edit X', 0, 95)
+    const yPercent = parseBoundedNumber(textEditY, 'Edit Y', 0, 95)
+    const widthPercent = parseBoundedNumber(textEditWidth, 'Edit width', 5, 100)
+    const heightPercent = parseBoundedNumber(textEditHeight, 'Edit height', 5, 100)
+    const fontSize = parseBoundedNumber(textEditFontSize, 'Edit font size', 8, 72)
+
+    if (
+      xPercent === null ||
+      yPercent === null ||
+      widthPercent === null ||
+      heightPercent === null ||
+      fontSize === null
+    ) {
+      return null
+    }
+
+    return normalizeTextTargetRegion({
+      xPercent,
+      yPercent,
+      widthPercent,
+      heightPercent,
+      fontSize,
+    })
+  }
+
   function resolveTextEditLayout() {
     const xPercent = parseBoundedNumber(textEditX, 'Edit X', 0, 95)
     const yPercent = parseBoundedNumber(textEditY, 'Edit Y', 0, 95)
@@ -2244,21 +2366,26 @@
       return null
     }
 
-    return {
+    const region = normalizeTextTargetRegion({
       xPercent,
       yPercent,
       widthPercent,
       heightPercent,
       fontSize,
+    })
+
+    return {
+      ...region,
       alignment: textEditAlignment,
     }
   }
 
   function resolveStickyNoteAnchor() {
-    if (selectedTextSpan) {
+    const selectedRegion = resolveSelectedTextTargetRegionPreview()
+    if (selectedRegion) {
       return {
-        xPercent: clamp(selectedTextSpan.xPercent + selectedTextSpan.widthPercent + 1.2, 0, 96),
-        yPercent: clamp(selectedTextSpan.yPercent, 0, 96),
+        xPercent: clamp(selectedRegion.xPercent + selectedRegion.widthPercent + 1.2, 0, 96),
+        yPercent: clamp(selectedRegion.yPercent, 0, 96),
       }
     }
 
@@ -2308,6 +2435,7 @@
   function clearSelectedTextTarget() {
     selectedTextSpanId = null
     inlineTextEditorOpen = false
+    textTargetDragSession = null
   }
 
   function selectAnnotation(annotation: PdfPageAnnotationOverlay) {
@@ -2355,11 +2483,13 @@
     selectedTextSpanId = span.id
     inlineTextEditorOpen = true
     textEditContent = span.text
-    textEditX = span.xPercent.toFixed(2)
-    textEditY = span.yPercent.toFixed(2)
-    textEditWidth = span.widthPercent.toFixed(2)
-    textEditHeight = Math.max(span.heightPercent, 5).toFixed(2)
-    textEditFontSize = Math.round(span.fontSize).toString()
+    applyTextEditRegion({
+      xPercent: span.xPercent,
+      yPercent: span.yPercent,
+      widthPercent: Math.max(span.widthPercent, 5),
+      heightPercent: Math.max(span.heightPercent, 5),
+      fontSize: span.fontSize,
+    })
     textEditAlignment = 'left'
 
     if (options.focusEditor ?? true) {
@@ -2370,20 +2500,117 @@
   }
 
   function resolveInlineTextEditorPosition() {
-    if (!selectedTextSpan) {
+    const selectedRegion = resolveSelectedTextTargetRegionPreview()
+    if (!selectedRegion) {
       return null
     }
 
     const cardWidthPercent = 26
-    const shouldPlaceRight = selectedTextSpan.xPercent + selectedTextSpan.widthPercent + cardWidthPercent <= 98
+    const shouldPlaceRight = selectedRegion.xPercent + selectedRegion.widthPercent + cardWidthPercent <= 98
     const xPercent = shouldPlaceRight
-      ? clamp(selectedTextSpan.xPercent + selectedTextSpan.widthPercent + 1.4, 2, 98 - cardWidthPercent)
-      : clamp(selectedTextSpan.xPercent - cardWidthPercent - 1.4, 2, 98 - cardWidthPercent)
+      ? clamp(selectedRegion.xPercent + selectedRegion.widthPercent + 1.4, 2, 98 - cardWidthPercent)
+      : clamp(selectedRegion.xPercent - cardWidthPercent - 1.4, 2, 98 - cardWidthPercent)
 
     return {
       xPercent,
-      yPercent: clamp(selectedTextSpan.yPercent - 1.2, 1.5, 84),
+      yPercent: clamp(selectedRegion.yPercent - 1.2, 1.5, 84),
     }
+  }
+
+  function startTextTargetRegionDrag(handle: TextTargetRegionHandle, event: PointerEvent) {
+    if (busy || !selectedTextSpan || !viewerSurface) {
+      return
+    }
+
+    const startRegion = resolveSelectedTextTargetRegionPreview()
+    if (!startRegion) {
+      return
+    }
+
+    const surfaceBounds = viewerSurface.getBoundingClientRect()
+    if (surfaceBounds.width <= 0 || surfaceBounds.height <= 0) {
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+
+    textTargetDragSession = {
+      handle,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      surfaceWidth: surfaceBounds.width,
+      surfaceHeight: surfaceBounds.height,
+      startRegion,
+    }
+  }
+
+  function updateDraggedTextTargetRegion(clientX: number, clientY: number) {
+    if (!textTargetDragSession) {
+      return
+    }
+
+    const minimumWidth = 5
+    const minimumHeight = 5
+    const { handle, startClientX, startClientY, surfaceWidth, surfaceHeight, startRegion } = textTargetDragSession
+    const deltaXPercent = ((clientX - startClientX) / surfaceWidth) * 100
+    const deltaYPercent = ((clientY - startClientY) / surfaceHeight) * 100
+
+    if (handle === 'move') {
+      applyTextEditRegion({
+        xPercent: clamp(startRegion.xPercent + deltaXPercent, 0, 100 - startRegion.widthPercent),
+        yPercent: clamp(startRegion.yPercent + deltaYPercent, 0, 100 - startRegion.heightPercent),
+        widthPercent: startRegion.widthPercent,
+        heightPercent: startRegion.heightPercent,
+        fontSize: startRegion.fontSize,
+      })
+      return
+    }
+
+    let left = startRegion.xPercent
+    let top = startRegion.yPercent
+    let right = startRegion.xPercent + startRegion.widthPercent
+    let bottom = startRegion.yPercent + startRegion.heightPercent
+
+    if (handle.includes('w')) {
+      left += deltaXPercent
+    }
+
+    if (handle.includes('e')) {
+      right += deltaXPercent
+    }
+
+    if (handle.includes('n')) {
+      top += deltaYPercent
+    }
+
+    if (handle.includes('s')) {
+      bottom += deltaYPercent
+    }
+
+    if (handle.includes('w')) {
+      left = clamp(left, 0, right - minimumWidth)
+    }
+
+    if (handle.includes('e')) {
+      right = clamp(right, left + minimumWidth, 100)
+    }
+
+    if (handle.includes('n')) {
+      top = clamp(top, 0, bottom - minimumHeight)
+    }
+
+    if (handle.includes('s')) {
+      bottom = clamp(bottom, top + minimumHeight, 100)
+    }
+
+    applyTextEditRegion({
+      xPercent: left,
+      yPercent: top,
+      widthPercent: right - left,
+      heightPercent: bottom - top,
+      fontSize: startRegion.fontSize,
+    })
   }
 
   function handlePageDragStart(pageNumber: number, event: DragEvent) {
@@ -3220,6 +3447,8 @@
           <div class="viewer-pane" bind:this={viewerPane}>
             <div
               class="viewer-surface"
+              bind:this={viewerSurface}
+              data-testid="viewer-surface"
               style:width={renderedPageWidth ? `${renderedPageWidth}px` : undefined}
               style:height={renderedPageHeight ? `${renderedPageHeight}px` : undefined}
             >
@@ -3266,6 +3495,36 @@
                     ></button>
                   {/each}
                 </div>
+              {/if}
+              {#if textTargetMode && selectedTextSpan}
+                {@const selectedRegion = resolveSelectedTextTargetRegionPreview()}
+                {#if selectedRegion}
+                  <div class="text-target-selection-layer">
+                    <div
+                      class="text-target-selection-frame"
+                      data-testid="text-target-region-frame"
+                      role="button"
+                      tabindex="0"
+                      aria-label="Move selected text region"
+                      style:left={`${selectedRegion.xPercent}%`}
+                      style:top={`${selectedRegion.yPercent}%`}
+                      style:width={`${selectedRegion.widthPercent}%`}
+                      style:height={`${selectedRegion.heightPercent}%`}
+                      on:pointerdown={(event) => startTextTargetRegionDrag('move', event)}
+                    >
+                      {#each textTargetRegionHandles as handle}
+                        <button
+                          type="button"
+                          class={`text-target-handle text-target-handle-${handle}`}
+                          data-testid={`text-target-handle-${handle}`}
+                          aria-label={`Adjust selected text region ${handle}`}
+                          on:pointerdown|stopPropagation={(event) => startTextTargetRegionDrag(handle, event)}
+                          disabled={busy}
+                        ></button>
+                      {/each}
+                    </div>
+                  </div>
+                {/if}
               {/if}
               {#if textTargetMode && inlineTextEditorOpen && selectedTextSpan}
                 {@const inlineEditorPosition = resolveInlineTextEditorPosition()}

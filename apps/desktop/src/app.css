@@ -721,9 +721,98 @@ button:disabled {
   transform: none;
 }
 
+.text-target-selection-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.text-target-selection-frame {
+  position: absolute;
+  border-radius: 10px;
+  border: 2px solid rgba(99, 178, 255, 0.92);
+  background: rgba(99, 178, 255, 0.12);
+  box-shadow:
+    0 0 0 1px rgba(10, 16, 22, 0.44),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  pointer-events: auto;
+  cursor: move;
+  touch-action: none;
+}
+
+.text-target-handle {
+  --handle-translate: translate(-50%, -50%);
+  position: absolute;
+  width: 0.86rem;
+  height: 0.86rem;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid rgba(7, 11, 16, 0.64);
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28);
+  transform: var(--handle-translate);
+  touch-action: none;
+}
+
+.text-target-handle:hover:not(:disabled),
+.text-target-handle:focus-visible {
+  border-color: rgba(99, 178, 255, 0.98);
+  background: rgba(233, 244, 255, 0.98);
+  transform: var(--handle-translate);
+}
+
+.text-target-handle-nw {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+
+.text-target-handle-n {
+  top: 0;
+  left: 50%;
+  cursor: ns-resize;
+}
+
+.text-target-handle-ne {
+  top: 0;
+  left: 100%;
+  cursor: nesw-resize;
+}
+
+.text-target-handle-e {
+  top: 50%;
+  left: 100%;
+  cursor: ew-resize;
+}
+
+.text-target-handle-se {
+  top: 100%;
+  left: 100%;
+  cursor: nwse-resize;
+}
+
+.text-target-handle-s {
+  top: 100%;
+  left: 50%;
+  cursor: ns-resize;
+}
+
+.text-target-handle-sw {
+  top: 100%;
+  left: 0;
+  cursor: nesw-resize;
+}
+
+.text-target-handle-w {
+  top: 50%;
+  left: 0;
+  cursor: ew-resize;
+}
+
 .inline-text-editor {
   position: absolute;
-  z-index: 4;
+  z-index: 5;
   width: min(26rem, 28vw);
   min-width: 15rem;
   max-width: calc(100% - 1rem);

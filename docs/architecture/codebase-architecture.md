@@ -353,7 +353,7 @@ Status on March 18, 2026:
 - true page editing implemented through positioned text-block and whiteout-replace PDF mutations
 - true PDF annotation support implemented for sticky notes plus highlight, underline, and strikeout markup
 - current-page annotation management, in-place comment editing, and removal implemented in the desktop rail
-- text-targeted replacement implemented from PDF.js-extracted page text geometry for born-digital PDFs, with a direct inline viewer editor for faster Acrobat-like interaction
+- text-targeted replacement implemented from PDF.js-extracted page text geometry for born-digital PDFs, with a direct inline viewer editor plus draggable and resizable on-page region handles for faster Acrobat-like interaction
 - restricted content-stream rewrite implemented for width-safe `Tj`, split `Tj`/`TJ` sequences, `TJ`, and line-show text operators on simple standard-font born-digital PDFs, with automatic overlay fallback on harder documents
 - Markdown plus semantic structured JSON, layout-aware HTML, and layout-aware DOCX conversion/export implemented locally from extracted PDF text and page geometry
 - detached CMS signature integrity verification implemented through local OpenSSL

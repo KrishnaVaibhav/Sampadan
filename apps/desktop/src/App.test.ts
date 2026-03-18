@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/svelte'
+import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
@@ -861,6 +861,60 @@ describe('Sampadan desktop app regression suite', () => {
     await waitFor(() => {
       expect(screen.getByText('Replaced selected text on page 1')).toBeTruthy()
     })
+  })
+
+  test('drags the selected text region directly in the viewer', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect((screen.getByTestId('toggle-text-target-button') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    const viewerSurface = screen.getByTestId('viewer-surface') as HTMLDivElement
+    vi.spyOn(viewerSurface, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 800,
+      bottom: 1000,
+      width: 800,
+      height: 1000,
+      toJSON: () => ({}),
+    } as DOMRect)
+
+    await user.click(screen.getByTestId('toggle-text-target-button'))
+    await waitFor(() => {
+      expect(screen.getByLabelText('Target text: Page 1 line')).toBeTruthy()
+    })
+
+    await user.click(screen.getByLabelText('Target text: Page 1 line'))
+    await waitFor(() => {
+      expect(screen.getByTestId('text-target-region-frame')).toBeTruthy()
+    })
+
+    const widthInput = screen.getByLabelText('Width %') as HTMLInputElement
+    const heightInput = screen.getByLabelText('Height %') as HTMLInputElement
+
+    expect(Number.parseFloat(widthInput.value)).toBeCloseTo(24, 2)
+    expect(Number.parseFloat(heightInput.value)).toBeCloseTo(5, 2)
+
+    await fireEvent.pointerDown(screen.getByTestId('text-target-handle-se'), {
+      clientX: 288,
+      clientY: 190,
+    })
+    await fireEvent.pointerMove(window, {
+      clientX: 376,
+      clientY: 260,
+    })
+    await fireEvent.pointerUp(window)
+
+    expect(Number.parseFloat(widthInput.value)).toBeGreaterThan(24)
+    expect(Number.parseFloat(heightInput.value)).toBeGreaterThan(5)
   })
 
   test('adds true PDF annotations from the selected text flow', async () => {
