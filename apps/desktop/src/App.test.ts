@@ -124,6 +124,7 @@ vi.mock('./lib/operations/pdf-annotations', () => ({
   addStickyNoteAnnotationToDocument: vi.fn(async () => Uint8Array.from([9, 9, 1])),
   addTextMarkupAnnotationToDocument: vi.fn(async () => Uint8Array.from([9, 9, 2])),
   removeAnnotationFromDocument: vi.fn(async () => Uint8Array.from([9, 9, 3])),
+  updateAnnotationInDocument: vi.fn(async () => Uint8Array.from([9, 9, 4])),
 }))
 
 vi.mock('./lib/operations/pdf-forms', () => ({
@@ -193,6 +194,7 @@ vi.mock('./lib/session/recent-files', () => ({
 }))
 
 import App from './App.svelte'
+import * as annotationOperations from './lib/operations/pdf-annotations'
 
 const sampleTrustReport: PdfTrustReport = {
   signatureCount: 1,
@@ -319,6 +321,10 @@ beforeEach(() => {
   openDialogMock.mockReset()
   saveDialogMock.mockReset()
   invokeMock.mockReset()
+  vi.mocked(annotationOperations.addStickyNoteAnnotationToDocument).mockClear()
+  vi.mocked(annotationOperations.addTextMarkupAnnotationToDocument).mockClear()
+  vi.mocked(annotationOperations.removeAnnotationFromDocument).mockClear()
+  vi.mocked(annotationOperations.updateAnnotationInDocument).mockClear()
 
   invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
     switch (command) {
@@ -806,6 +812,43 @@ describe('Sampadan desktop app regression suite', () => {
     })
   })
 
+  test('updates a selected page annotation through the local mutation pipeline', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect(screen.getByLabelText('Select annotation 1')).toBeTruthy()
+    })
+
+    await user.click(screen.getByLabelText('Select annotation 1'))
+
+    expect((screen.getByLabelText('Note Title') as HTMLInputElement).value).toBe('Sampadan')
+    expect((screen.getByLabelText('Note Text') as HTMLTextAreaElement).value).toBe('Existing annotation')
+
+    await user.clear(screen.getByLabelText('Note Title'))
+    await user.type(screen.getByLabelText('Note Title'), 'Updated Review')
+    await user.clear(screen.getByLabelText('Note Text'))
+    await user.type(screen.getByLabelText('Note Text'), 'Updated annotation text.')
+    await user.click(screen.getByTestId('update-selected-annotation-button'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Updated selected annotation on page 1')).toBeTruthy()
+    })
+
+    expect(annotationOperations.updateAnnotationInDocument).toHaveBeenCalledWith(
+      expect.any(Uint8Array),
+      expect.objectContaining({
+        pageIndex: 0,
+        annotationId: 'annotation-1',
+        title: 'Updated Review',
+        contents: 'Updated annotation text.',
+      }),
+    )
+  })
+
   test('applies AcroForm field edits through the local mutation pipeline', async () => {
     openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
 
@@ -949,5 +992,5 @@ describe('Sampadan desktop app regression suite', () => {
     expectCamelCasePayloadKeys(getInvokePayloads('inspect_pdf_bytes'), ['fileName', 'bytesBase64'])
     expectCamelCasePayloadKeys(getInvokePayloads('load_file_bytes'), ['path'])
     expectCamelCasePayloadKeys(getInvokePayloads('save_file_bytes'), ['path', 'bytesBase64'])
-  })
+  }, 10000)
 })

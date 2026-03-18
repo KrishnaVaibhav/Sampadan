@@ -20,6 +20,7 @@
     addTextMarkupAnnotationToDocument,
     type PdfMarkupAnnotationKind,
     removeAnnotationFromDocument,
+    updateAnnotationInDocument,
   } from './lib/operations/pdf-annotations'
   import {
     addAttachmentToDocument,
@@ -139,6 +140,13 @@
     { value: 'green', label: 'Green' },
     { value: 'rose', label: 'Rose' },
   ]
+
+  const reviewToneRgbMap: Record<ReviewNoteTone, [number, number, number]> = {
+    amber: [245, 189, 71],
+    blue: [74, 145, 230],
+    green: [61, 168, 110],
+    rose: [219, 107, 133],
+  }
 
   const textEditAlignmentOptions: Array<{ value: TextEditAlignment; label: string }> = [
     { value: 'left', label: 'Left' },
@@ -1591,6 +1599,27 @@
     await removeAnnotation(selectedAnnotation)
   }
 
+  async function updateSelectedAnnotation() {
+    if (!workspace || busy || !selectedAnnotation) return
+
+    const currentWorkspace = workspace
+
+    await runDocumentMutation({
+      workingStatus: `Updating selected annotation on page ${currentPage}`,
+      successStatus: `Updated selected annotation on page ${currentPage}`,
+      errorStatus: 'Failed to update the selected annotation',
+      nextCurrentPage: currentPage,
+      mutate: () =>
+        updateAnnotationInDocument(currentWorkspace.bytes, {
+          pageIndex: currentPage - 1,
+          annotationId: selectedAnnotation.id,
+          title: reviewNoteTitle,
+          contents: reviewNoteBody,
+          tone: selectedAnnotation.kind === 'text' ? reviewNoteTone : undefined,
+        }),
+    })
+  }
+
   async function removeAnnotation(annotation: PdfPageAnnotationOverlay) {
     if (!workspace || busy) return
 
@@ -2240,10 +2269,43 @@
 
   function selectAnnotation(annotation: PdfPageAnnotationOverlay) {
     selectedAnnotationId = annotation.id
+    reviewNoteTitle = annotation.title?.trim() || 'Review Note'
+    reviewNoteBody = annotation.contents
+    if (annotation.kind === 'text') {
+      reviewNoteTone = resolveReviewToneForAnnotation(annotation)
+    }
   }
 
   function clearSelectedAnnotation() {
     selectedAnnotationId = null
+  }
+
+  function resolveReviewToneForAnnotation(annotation: PdfPageAnnotationOverlay): ReviewNoteTone {
+    const rgbMatch = annotation.colorCss.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/i)
+    if (!rgbMatch) {
+      return reviewNoteTone
+    }
+
+    const color = rgbMatch.slice(1).map((value) => Number.parseInt(value, 10))
+    if (color.some((value) => !Number.isFinite(value))) {
+      return reviewNoteTone
+    }
+
+    let closestTone: ReviewNoteTone = reviewNoteTone
+    let closestDistance = Number.POSITIVE_INFINITY
+
+    for (const [tone, target] of Object.entries(reviewToneRgbMap) as Array<[ReviewNoteTone, [number, number, number]]>) {
+      const distance = Math.sqrt(
+        Math.pow(color[0] - target[0], 2) + Math.pow(color[1] - target[1], 2) + Math.pow(color[2] - target[2], 2),
+      )
+
+      if (distance < closestDistance) {
+        closestDistance = distance
+        closestTone = tone
+      }
+    }
+
+    return closestTone
   }
 
   function selectTextTarget(span: PdfPageTextSpan) {
@@ -2788,6 +2850,13 @@
               {/each}
             </div>
             <div class="tool-grid">
+              <button
+                data-testid="update-selected-annotation-button"
+                on:click={updateSelectedAnnotation}
+                disabled={busy || !workspace || !selectedAnnotation}
+              >
+                Update Selected Annotation
+              </button>
               <button
                 data-testid="remove-selected-annotation-button"
                 on:click={removeSelectedAnnotation}

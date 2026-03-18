@@ -28,6 +28,14 @@ type RemoveAnnotationOptions = {
   annotationId: string
 }
 
+type UpdateAnnotationOptions = {
+  pageIndex: number
+  annotationId: string
+  title: string
+  contents: string
+  tone?: ReviewNoteTone
+}
+
 async function loadDocument(bytes: Uint8Array) {
   const { PDFDocument } = await getPdfLib()
   return PDFDocument.load(bytes.slice(), { updateMetadata: false })
@@ -153,6 +161,55 @@ function parseAnnotationRefId(annotationId: string) {
   return null
 }
 
+function resolveAnnotationTarget(
+  document: Awaited<ReturnType<typeof loadDocument>>,
+  pdfLib: Awaited<ReturnType<typeof getPdfLib>>,
+  options: {
+    pageIndex: number
+    annotationId: string
+  },
+) {
+  const { PDFDict, PDFRef } = pdfLib
+
+  if (options.pageIndex < 0 || options.pageIndex >= document.getPageCount()) {
+    throw new Error('Choose a valid page before editing the annotation.')
+  }
+
+  const parsedRef = parseAnnotationRefId(options.annotationId)
+  if (!parsedRef) {
+    throw new Error('Sampadan could not resolve the selected annotation reference.')
+  }
+
+  const page = document.getPage(options.pageIndex)
+  const annots = page.node.Annots()
+  if (!annots) {
+    throw new Error('This page does not contain any editable annotations.')
+  }
+
+  const annotationRef = PDFRef.of(parsedRef.objectNumber, parsedRef.generationNumber)
+  const annotationBelongsToPage = annots.asArray().some(
+    (entry) =>
+      entry instanceof PDFRef &&
+      entry.objectNumber === parsedRef.objectNumber &&
+      entry.generationNumber === parsedRef.generationNumber,
+  )
+
+  if (!annotationBelongsToPage) {
+    throw new Error('Sampadan could not find the selected annotation on this page.')
+  }
+
+  const annotation = document.context.lookupMaybe(annotationRef, PDFDict)
+  if (!annotation) {
+    throw new Error('Sampadan could not load the selected annotation for editing.')
+  }
+
+  return {
+    page,
+    annotation,
+    annotationRef,
+  }
+}
+
 export async function addStickyNoteAnnotationToDocument(bytes: Uint8Array, options: StickyNoteOptions) {
   const pdfLib = await getPdfLib()
   const { PDFName, PDFString, AnnotationFlags } = pdfLib
@@ -256,23 +313,33 @@ export async function addTextMarkupAnnotationToDocument(bytes: Uint8Array, optio
   return saveDocument(document)
 }
 
+export async function updateAnnotationInDocument(bytes: Uint8Array, options: UpdateAnnotationOptions) {
+  const pdfLib = await getPdfLib()
+  const { PDFName, PDFString } = pdfLib
+  const document = await loadDocument(bytes)
+  const { page, annotation } = resolveAnnotationTarget(document, pdfLib, options)
+  const title = options.title.trim() || 'Sampadan'
+  const contents = options.contents.trim()
+
+  annotation.set(PDFName.of('T'), PDFString.of(title))
+  annotation.set(PDFName.of('Contents'), PDFString.of(contents))
+  annotation.set(PDFName.of('M'), PDFString.of(buildPdfDate(new Date())))
+  annotation.set(PDFName.of('P'), page.ref)
+
+  const subtype = annotation.lookupMaybe(PDFName.of('Subtype'), PDFName)?.toString() ?? ''
+  if (subtype === '/Text' && options.tone) {
+    annotation.set(PDFName.of('C'), document.context.obj(resolveToneColor(options.tone)))
+  }
+
+  return saveDocument(document)
+}
+
 export async function removeAnnotationFromDocument(bytes: Uint8Array, options: RemoveAnnotationOptions) {
   const pdfLib = await getPdfLib()
-  const { PDFRef } = pdfLib
   const document = await loadDocument(bytes)
-
-  if (options.pageIndex < 0 || options.pageIndex >= document.getPageCount()) {
-    throw new Error('Choose a valid page before removing the annotation.')
-  }
-
-  const parsedRef = parseAnnotationRefId(options.annotationId)
-  if (!parsedRef) {
-    throw new Error('Sampadan could not resolve the selected annotation reference.')
-  }
-
+  const { annotationRef } = resolveAnnotationTarget(document, pdfLib, options)
   const page = document.getPage(options.pageIndex)
-  const annotRef = PDFRef.of(parsedRef.objectNumber, parsedRef.generationNumber)
-  page.node.removeAnnot(annotRef)
+  page.node.removeAnnot(annotationRef)
 
   return saveDocument(document)
 }

@@ -6,6 +6,7 @@ import {
   addStickyNoteAnnotationToDocument,
   addTextMarkupAnnotationToDocument,
   removeAnnotationFromDocument,
+  updateAnnotationInDocument,
 } from './pdf-annotations'
 
 describe('real PDF annotation operations', () => {
@@ -76,5 +77,63 @@ describe('real PDF annotation operations', () => {
       expect.arrayContaining(['Highlight', 'Underline', 'StrikeOut']),
     )
     expect(annotationsAfterRemoval.map((annotation) => annotation.subtype)).not.toContain('Text')
+  })
+
+  test('updates existing annotation dictionaries in place on real PDF bytes', async () => {
+    const source = await createSamplePdf(1)
+
+    const highlighted = await addTextMarkupAnnotationToDocument(source, {
+      kind: 'highlight',
+      pageIndex: 0,
+      xPercent: 10,
+      yPercent: 12,
+      widthPercent: 28,
+      heightPercent: 3.2,
+      title: 'Initial Review',
+      contents: 'Original markup note.',
+    })
+
+    const annotated = await addStickyNoteAnnotationToDocument(highlighted, {
+      title: 'Original Note',
+      contents: 'Original sticky note.',
+      pageIndexes: [0],
+      xPercent: 72,
+      yPercent: 10,
+      tone: 'amber',
+    })
+
+    const initialAnnotations = await readPdfPageAnnotations(annotated, 1)
+    const highlight = initialAnnotations.find((annotation) => annotation.subtype === 'Highlight')
+    const stickyNote = initialAnnotations.find((annotation) => annotation.subtype === 'Text')
+
+    expect(highlight?.id).toBeTruthy()
+    expect(stickyNote?.id).toBeTruthy()
+
+    const highlightUpdated = await updateAnnotationInDocument(annotated, {
+      pageIndex: 0,
+      annotationId: highlight!.id,
+      title: 'Updated Review',
+      contents: 'Updated markup note.',
+    })
+
+    const fullyUpdated = await updateAnnotationInDocument(highlightUpdated, {
+      pageIndex: 0,
+      annotationId: stickyNote!.id,
+      title: 'Updated Note',
+      contents: 'Updated sticky note.',
+      tone: 'blue',
+    })
+
+    const updatedAnnotations = await readPdfPageAnnotations(fullyUpdated, 1)
+
+    expect(updatedAnnotations).toHaveLength(2)
+    expect(updatedAnnotations.find((annotation) => annotation.subtype === 'Highlight')).toMatchObject({
+      title: 'Updated Review',
+      contents: 'Updated markup note.',
+    })
+    expect(updatedAnnotations.find((annotation) => annotation.subtype === 'Text')).toMatchObject({
+      title: 'Updated Note',
+      contents: 'Updated sticky note.',
+    })
   })
 })
