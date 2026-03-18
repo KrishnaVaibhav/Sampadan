@@ -491,6 +491,10 @@ button:disabled {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.field-span {
+  grid-column: 1 / -1;
+}
+
 .field-label {
   color: var(--text-soft);
   font-size: 0.76rem;
@@ -512,6 +516,11 @@ button:disabled {
 .field-input:focus {
   border-color: rgba(243, 165, 48, 0.5);
   box-shadow: 0 0 0 3px rgba(243, 165, 48, 0.12);
+}
+
+.note-body {
+  min-height: 5.2rem;
+  resize: vertical;
 }
 
 .check-field {

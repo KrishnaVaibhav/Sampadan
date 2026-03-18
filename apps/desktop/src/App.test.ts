@@ -56,6 +56,7 @@ vi.mock('./lib/operations/pdf-document', () => ({
   mergeDocuments: vi.fn(async () => Uint8Array.from([9, 9, 9, 9])),
   insertDocumentAfterPage: vi.fn(async () => Uint8Array.from([8, 8, 8, 8])),
   addImageStampToDocument: vi.fn(async () => Uint8Array.from([6, 6, 6])),
+  addReviewNoteToDocument: vi.fn(async () => Uint8Array.from([7, 7, 7])),
   rotatePageInDocument: vi.fn(async () => Uint8Array.from([1, 2, 3])),
   movePageInDocument: vi.fn(async () => Uint8Array.from([1, 2, 3])),
   extractPagesFromDocument: vi.fn(async () => Uint8Array.from([1, 2, 3])),
@@ -283,6 +284,7 @@ describe('Sampadan desktop app regression suite', () => {
     expect((screen.getByTestId('save-pdf-button') as HTMLButtonElement).disabled).toBe(false)
     expect((screen.getByTestId('ocr-page-button') as HTMLButtonElement).disabled).toBe(false)
     expect((screen.getByTestId('searchable-pdf-button') as HTMLButtonElement).disabled).toBe(false)
+    await user.type(screen.getByLabelText('Note Text'), 'Viewer review note')
 
     for (const label of [
       'Save As',
@@ -305,6 +307,7 @@ describe('Sampadan desktop app regression suite', () => {
       'Export PNG',
       'Apply Watermark',
       'Place Image Stamp',
+      'Add Review Note',
       'Add Page Numbers',
       'Save Protected Copy',
     ]) {
@@ -549,6 +552,8 @@ describe('Sampadan desktop app regression suite', () => {
     await user.click(screen.getByRole('button', { name: 'Apply Metadata' }))
     await user.click(screen.getByRole('button', { name: 'Apply Watermark' }))
     await user.click(screen.getByRole('button', { name: 'Place Image Stamp' }))
+    await user.type(screen.getByLabelText('Note Text'), 'Check alignment on page 2.')
+    await user.click(screen.getByRole('button', { name: 'Add Review Note' }))
     await user.click(screen.getByRole('button', { name: 'Add Page Numbers' }))
 
     await user.click(screen.getByRole('button', { name: 'Export PNG' }))

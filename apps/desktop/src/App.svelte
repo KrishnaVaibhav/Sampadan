@@ -6,6 +6,7 @@
   import { fetchOcrStatus, runOcrForBlob, runOcrPdfForBlob } from './lib/ocr/ocr-client'
   import { type PdfProxy, loadPdfProxy } from './lib/pdf-engine'
   import {
+    addReviewNoteToDocument,
     addPageNumbersToDocument,
     addImageStampToDocument,
     addTextWatermarkToDocument,
@@ -21,7 +22,11 @@
     rotatePageInDocument,
     splitDocumentIntoSinglePages,
   } from './lib/operations/pdf-document'
-  import type { PageNumberPosition, WatermarkPosition } from './lib/operations/pdf-document'
+  import type {
+    PageNumberPosition,
+    ReviewNoteTone,
+    WatermarkPosition,
+  } from './lib/operations/pdf-document'
   import {
     base64ToBytes,
     blobToBase64,
@@ -96,6 +101,13 @@
     { value: 'header-left', label: 'Header left' },
   ]
 
+  const reviewToneOptions: Array<{ value: ReviewNoteTone; label: string }> = [
+    { value: 'amber', label: 'Amber' },
+    { value: 'blue', label: 'Blue' },
+    { value: 'green', label: 'Green' },
+    { value: 'rose', label: 'Rose' },
+  ]
+
   const protectionPrintOptions: Array<{ value: PdfProtectionPrintAccess; label: string }> = [
     { value: 'full', label: 'Full printing' },
     { value: 'low', label: 'Low-res printing' },
@@ -131,6 +143,9 @@
   let editScope: 'current' | 'all' = 'current'
   let watermarkText = 'CONFIDENTIAL'
   let watermarkPosition: WatermarkPosition = 'center'
+  let reviewNoteTitle = 'Review Note'
+  let reviewNoteBody = ''
+  let reviewNoteTone: ReviewNoteTone = 'amber'
   let pageNumberStart = '1'
   let pageNumberPosition: PageNumberPosition = 'footer-center'
   let dragSourcePage: number | null = null
@@ -1076,6 +1091,35 @@
     })
   }
 
+  async function addReviewNote() {
+    if (!workspace || busy) return
+
+    const body = reviewNoteBody.trim()
+    if (!body) {
+      reportError(new Error('Enter note text before adding a review note.'), 'Review note text is required')
+      return
+    }
+
+    const currentWorkspace = workspace
+    const pageIndexes = resolveEditPageIndexes(currentWorkspace)
+    const scopeLabel = formatEditScopeLabel(currentWorkspace)
+
+    await runDocumentMutation({
+      workingStatus: `Adding review note to ${scopeLabel}`,
+      successStatus: `Added review note to ${scopeLabel}`,
+      errorStatus: 'Failed to add the review note',
+      nextCurrentPage: currentPage,
+      mutate: () =>
+        addReviewNoteToDocument(currentWorkspace.bytes, {
+          title: reviewNoteTitle,
+          body,
+          pageIndexes,
+          position: watermarkPosition,
+          tone: reviewNoteTone,
+        }),
+    })
+  }
+
   async function runDocumentMutation(options: {
     workingStatus: string
     successStatus: string
@@ -1515,6 +1559,38 @@
         </button>
         <button data-testid="image-stamp-button" on:click={placeImageStamp} disabled={busy || !workspace}>
           Place Image Stamp
+        </button>
+
+        <div class="field-grid">
+          <label class="field">
+            <span class="field-label">Note Title</span>
+            <input
+              class="field-input"
+              bind:value={reviewNoteTitle}
+              disabled={!workspace || busy}
+              placeholder="Review Note"
+            />
+          </label>
+          <label class="field">
+            <span class="field-label">Note Tone</span>
+            <select class="field-input" bind:value={reviewNoteTone} disabled={!workspace || busy}>
+              {#each reviewToneOptions as option}
+                <option value={option.value}>{option.label}</option>
+              {/each}
+            </select>
+          </label>
+          <label class="field field-span">
+            <span class="field-label">Note Text</span>
+            <textarea
+              class="field-input note-body"
+              bind:value={reviewNoteBody}
+              disabled={!workspace || busy}
+              placeholder="Summarize the issue, revision, or approval note."
+            ></textarea>
+          </label>
+        </div>
+        <button data-testid="review-note-button" on:click={addReviewNote} disabled={busy || !workspace || !reviewNoteBody.trim()}>
+          Add Review Note
         </button>
 
         <label class="field">

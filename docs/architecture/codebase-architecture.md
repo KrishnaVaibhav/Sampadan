@@ -140,7 +140,7 @@ Planned split:
 
 ### Mutate Document
 
-1. UI triggers an operation such as rotate, reorder, merge, insert, watermark, image stamping, or page numbering.
+1. UI triggers an operation such as rotate, reorder, merge, insert, watermark, image stamping, review notes, or page numbering.
 2. Frontend uses the document mutation layer to produce a new byte stream.
 3. Rust re-inspects the updated bytes.
 4. Frontend replaces the active workspace with the new classified document.
@@ -211,7 +211,7 @@ These are the modules the codebase should grow into instead of adding more logic
 - `src/lib/viewer/pdf-viewer.ts`
   PDF.js canvas rendering, thumbnails, and text extraction
 - `src/lib/operations/pdf-document.ts`
-  merge, insert, rotate, extract, reorder, split, watermark, image stamping, page numbering, metadata, and export helpers
+  merge, insert, rotate, extract, reorder, split, watermark, image stamping, review notes, page numbering, metadata, and export helpers
 - `src/lib/types.ts`
   shared desktop payloads for trust, OCR, qpdf runtime state, and protected-copy options
 - `src/lib/ocr/ocr-client.ts`

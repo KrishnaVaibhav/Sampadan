@@ -2,6 +2,7 @@ import { getPdfLib } from '../pdf-engine'
 import type { PdfMetadataDraft } from '../types'
 
 export type WatermarkPosition = 'center' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+export type ReviewNoteTone = 'amber' | 'blue' | 'green' | 'rose'
 export type PageNumberPosition =
   | 'header-left'
   | 'header-center'
@@ -353,6 +354,84 @@ export async function addImageStampToDocument(
   return saveDocument(document)
 }
 
+export async function addReviewNoteToDocument(
+  bytes: Uint8Array,
+  options: {
+    title: string
+    body: string
+    pageIndexes: number[]
+    position: WatermarkPosition
+    tone: ReviewNoteTone
+  },
+) {
+  const { StandardFonts, rgb } = await getPdfLib()
+  const document = await loadDocument(bytes)
+  const titleFont = await document.embedFont(StandardFonts.HelveticaBold)
+  const bodyFont = await document.embedFont(StandardFonts.Helvetica)
+  const title = options.title.trim() || 'Review Note'
+  const body = options.body.trim()
+
+  if (!body) {
+    throw new Error('Enter note text before adding a review note.')
+  }
+
+  const pageIndexes = normalizePageIndexes(options.pageIndexes, document.getPageCount())
+  const tone = resolveReviewTone(options.tone)
+
+  for (const pageIndex of pageIndexes) {
+    const page = document.getPage(pageIndex)
+    const { width, height } = page.getSize()
+    const boxWidth = clampNumber(width * 0.36, 186, 272)
+    const titleSize = clampNumber(Math.min(width, height) * 0.026, 12, 17)
+    const bodySize = clampNumber(Math.min(width, height) * 0.021, 10, 14)
+    const innerPadding = clampNumber(boxWidth * 0.06, 12, 16)
+    const contentWidth = Math.max(96, boxWidth - innerPadding * 2)
+    const bodyLines = wrapTextToWidth(body, bodyFont, bodySize, contentWidth, 6)
+    const lineHeight = bodySize * 1.24
+    const bodyHeight = Math.max(bodySize, bodyLines.length * lineHeight)
+    const boxHeight = innerPadding * 2 + titleSize + 8 + bodyHeight
+    const position = resolveOverlayPosition({
+      pageWidth: width,
+      pageHeight: height,
+      textWidth: boxWidth,
+      textHeight: boxHeight,
+      position: options.position,
+    })
+
+    page.drawRectangle({
+      x: position.x,
+      y: position.y,
+      width: boxWidth,
+      height: boxHeight,
+      color: rgb(tone.fill[0], tone.fill[1], tone.fill[2]),
+      opacity: 0.92,
+      borderColor: rgb(tone.border[0], tone.border[1], tone.border[2]),
+      borderWidth: 1.5,
+      borderOpacity: 0.98,
+    })
+
+    page.drawText(title, {
+      x: position.x + innerPadding,
+      y: position.y + boxHeight - innerPadding - titleSize,
+      size: titleSize,
+      font: titleFont,
+      color: rgb(tone.title[0], tone.title[1], tone.title[2]),
+    })
+
+    for (const [lineIndex, line] of bodyLines.entries()) {
+      page.drawText(line, {
+        x: position.x + innerPadding,
+        y: position.y + boxHeight - innerPadding - titleSize - 8 - bodySize - lineIndex * lineHeight,
+        size: bodySize,
+        font: bodyFont,
+        color: rgb(tone.body[0], tone.body[1], tone.body[2]),
+      })
+    }
+  }
+
+  return saveDocument(document)
+}
+
 export async function addPageNumbersToDocument(
   bytes: Uint8Array,
   options: {
@@ -424,6 +503,100 @@ function isPng(bytes: Uint8Array) {
 
 function isJpeg(bytes: Uint8Array) {
   return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+}
+
+function wrapTextToWidth(
+  text: string,
+  font: { widthOfTextAtSize: (text: string, size: number) => number },
+  size: number,
+  maxWidth: number,
+  maxLines: number,
+) {
+  const lines: string[] = []
+
+  for (const paragraph of text.replace(/\r\n/g, '\n').split('\n')) {
+    const words = paragraph.trim().split(/\s+/).filter(Boolean)
+    if (words.length === 0) {
+      continue
+    }
+
+    let currentLine = ''
+    for (const word of words) {
+      const candidate = currentLine ? `${currentLine} ${word}` : word
+      if (!currentLine || font.widthOfTextAtSize(candidate, size) <= maxWidth) {
+        currentLine = candidate
+      } else {
+        lines.push(currentLine)
+        currentLine = word
+      }
+    }
+
+    if (currentLine) {
+      lines.push(currentLine)
+    }
+  }
+
+  if (lines.length <= maxLines) {
+    return lines
+  }
+
+  const visibleLines = lines.slice(0, maxLines)
+  const overflowText = [visibleLines[maxLines - 1], ...lines.slice(maxLines)].join(' ')
+  visibleLines[maxLines - 1] = ellipsizeText(overflowText, font, size, maxWidth)
+  return visibleLines
+}
+
+function ellipsizeText(
+  text: string,
+  font: { widthOfTextAtSize: (text: string, size: number) => number },
+  size: number,
+  maxWidth: number,
+) {
+  const normalized = text.trim()
+  if (!normalized) {
+    return '...'
+  }
+
+  let candidate = normalized
+  while (candidate.length > 1 && font.widthOfTextAtSize(`${candidate}...`, size) > maxWidth) {
+    candidate = candidate.slice(0, -1).trimEnd()
+  }
+
+  return candidate === normalized ? candidate : `${candidate}...`
+}
+
+function resolveReviewTone(tone: ReviewNoteTone) {
+  switch (tone) {
+    case 'blue':
+      return {
+        fill: [0.12, 0.2, 0.33],
+        border: [0.43, 0.66, 0.95],
+        title: [0.9, 0.95, 1],
+        body: [0.84, 0.9, 0.98],
+      }
+    case 'green':
+      return {
+        fill: [0.1, 0.22, 0.18],
+        border: [0.43, 0.79, 0.61],
+        title: [0.92, 0.98, 0.94],
+        body: [0.84, 0.95, 0.88],
+      }
+    case 'rose':
+      return {
+        fill: [0.28, 0.16, 0.2],
+        border: [0.93, 0.57, 0.67],
+        title: [1, 0.93, 0.95],
+        body: [0.97, 0.86, 0.89],
+      }
+    case 'amber':
+    default:
+      return {
+        fill: [0.29, 0.2, 0.08],
+        border: [0.95, 0.74, 0.34],
+        title: [1, 0.96, 0.88],
+        body: [0.98, 0.91, 0.78],
+      }
+  }
 }
 
 function normalizeKeywordsForDraft(value: string | string[] | undefined) {

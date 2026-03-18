@@ -4,6 +4,7 @@ import { createSamplePdf, readPdfSummary } from '../../test/pdf-fixtures'
 import {
   addPageNumbersToDocument,
   addImageStampToDocument,
+  addReviewNoteToDocument,
   addTextWatermarkToDocument,
   applyMetadataToDocument,
   deletePageFromDocument,
@@ -136,5 +137,22 @@ describe('real PDF document operations', () => {
 
     expect((await readPdfSummary(stamped)).pageCount).toBe(2)
     expect(stamped.length).toBeGreaterThan(source.length)
+  })
+
+  test('review notes preserve readability and embed the note text', async () => {
+    const source = await createSamplePdf(2)
+
+    const noted = await addReviewNoteToDocument(source, {
+      title: 'Page Review',
+      body: 'Follow up on alignment, export formatting, and attachment labeling.',
+      pageIndexes: [1],
+      position: 'top-right',
+      tone: 'blue',
+    })
+
+    expect((await readPdfSummary(noted)).pageCount).toBe(2)
+    const text = await readPdfText(noted)
+    expect(text).toContain('Page Review')
+    expect(text).toContain('Follow up on alignment')
   })
 })

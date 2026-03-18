@@ -367,6 +367,12 @@ describe('real PDF workflow actions', () => {
       expect(screen.getByText('Placed image stamp on page 2')).toBeTruthy()
     })
 
+    await user.type(screen.getByLabelText('Note Text'), 'Follow up on the inserted page.')
+    await user.click(screen.getByRole('button', { name: 'Add Review Note' }))
+    await waitFor(() => {
+      expect(screen.getByText('Added review note to page 2')).toBeTruthy()
+    })
+
     const titleInput = screen.getByLabelText('Title')
     await user.clear(titleInput)
     await user.type(titleInput, 'Workflow Edited')
@@ -420,7 +426,7 @@ describe('real PDF workflow actions', () => {
       const inspectCalls = invokeMock.mock.calls.filter(([command]) => command === 'inspect_pdf_bytes')
       const saveCalls = invokeMock.mock.calls.filter(([command]) => command === 'save_file_bytes')
 
-      expect(inspectCalls.length).toBeGreaterThanOrEqual(11)
+      expect(inspectCalls.length).toBeGreaterThanOrEqual(12)
       expect(saveCalls.length).toBe(17)
     })
 
