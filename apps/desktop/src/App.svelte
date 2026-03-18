@@ -197,6 +197,10 @@
     startRegion: TextTargetRegion
   }
 
+  type SelectedTextTarget = PdfPageTextSpan & {
+    spanIds: string[]
+  }
+
   const textTargetRegionHandles: TextTargetRegionHandle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
 
   let viewerCanvas: HTMLCanvasElement | null = null
@@ -225,8 +229,10 @@
   let currentPageAnnotations: PdfPageAnnotationOverlay[] = []
   let selectedAnnotationId: string | null = null
   let selectedAnnotation: PdfPageAnnotationOverlay | null = null
-  let selectedTextSpanId: string | null = null
-  let selectedTextSpan: PdfPageTextSpan | null = null
+  let selectedTextSpanIds: string[] = []
+  let selectedTextAnchorId: string | null = null
+  let selectedTextSpans: PdfPageTextSpan[] = []
+  let selectedTextSpan: SelectedTextTarget | null = null
   let textTargetMode = false
   let inlineTextEditorOpen = false
   let inlineTextEditor: HTMLTextAreaElement | null = null
@@ -276,7 +282,11 @@
   $: activeDocumentName = workspace?.fileName ?? pendingEncryptedPdf?.payload.fileName ?? 'No PDF loaded'
   $: viewerStatusLabel = workspace ? `Page ${currentPage} of ${workspace.pageCount}` : pendingEncryptedPdf ? 'Locked until unlocked' : 'Idle'
   $: selectedAnnotation = currentPageAnnotations.find((annotation) => annotation.id === selectedAnnotationId) ?? null
-  $: selectedTextSpan = currentPageTextSpans.find((span) => span.id === selectedTextSpanId) ?? null
+  $: selectedTextSpans = currentPageTextSpans.filter((span) => selectedTextSpanIds.includes(span.id))
+  $: selectedTextSpan = buildSelectedTextTarget(selectedTextSpans)
+  $: if (selectedTextAnchorId && !currentPageTextSpans.some((span) => span.id === selectedTextAnchorId)) {
+    selectedTextAnchorId = null
+  }
   $: if (!selectedTextSpan && inlineTextEditorOpen) {
     inlineTextEditorOpen = false
   }
@@ -1606,13 +1616,7 @@
     if (!targetRegion) {
       return
     }
-    const normalizedSelectedText = selectedTextSpan.text.replace(/\s+/g, ' ').trim()
-    const selectedTextOccurrence = Math.max(
-      0,
-      currentPageTextSpans
-        .filter((span) => span.text.replace(/\s+/g, ' ').trim() === normalizedSelectedText)
-        .findIndex((span) => span.id === selectedTextSpan.id),
-    )
+    const selectedTextOccurrence = resolveSelectedTextOccurrence()
 
     busy = true
     statusTone = 'busy'
@@ -1863,7 +1867,8 @@
     currentPageTextSpans = []
     currentPageAnnotations = []
     selectedAnnotationId = null
-    selectedTextSpanId = null
+    selectedTextSpanIds = []
+    selectedTextAnchorId = null
     renderedPageWidth = 0
     renderedPageHeight = 0
     metadataDraft = emptyMetadata()
@@ -1894,7 +1899,8 @@
     currentPageTextSpans = []
     currentPageAnnotations = []
     selectedAnnotationId = null
-    selectedTextSpanId = null
+    selectedTextSpanIds = []
+    selectedTextAnchorId = null
     renderedPageWidth = 0
     renderedPageHeight = 0
     metadataDraft = emptyMetadata()
@@ -2010,7 +2016,8 @@
   async function refreshCurrentPageTextTargets(pageNumber: number, scale: number, renderId: number) {
     if (!pdfProxy || !workspace) {
       currentPageTextSpans = []
-      selectedTextSpanId = null
+      selectedTextSpanIds = []
+      selectedTextAnchorId = null
       return
     }
 
@@ -2023,13 +2030,15 @@
       }
 
       currentPageTextSpans = spans
-      if (!spans.some((span) => span.id === selectedTextSpanId)) {
-        selectedTextSpanId = null
+      if (!selectedTextSpanIds.every((id) => spans.some((span) => span.id === id))) {
+        selectedTextSpanIds = []
+        selectedTextAnchorId = null
       }
     } catch {
       if (nextTextSpanToken === textSpanToken) {
         currentPageTextSpans = []
-        selectedTextSpanId = null
+        selectedTextSpanIds = []
+        selectedTextAnchorId = null
       }
     }
   }
@@ -2296,6 +2305,33 @@
     } satisfies TextTargetRegion
   }
 
+  function buildSelectedTextTarget(spans: PdfPageTextSpan[]): SelectedTextTarget | null {
+    if (spans.length === 0) {
+      return null
+    }
+
+    const left = Math.min(...spans.map((span) => span.xPercent))
+    const top = Math.min(...spans.map((span) => span.yPercent))
+    const right = Math.max(...spans.map((span) => span.xPercent + span.widthPercent))
+    const bottom = Math.max(...spans.map((span) => span.yPercent + span.heightPercent))
+
+    return {
+      id: spans.map((span) => span.id).join('::'),
+      pageNumber: spans[0].pageNumber,
+      text: spans
+        .map((span) => span.text.trim())
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim(),
+      xPercent: left,
+      yPercent: top,
+      widthPercent: right - left,
+      heightPercent: bottom - top,
+      fontSize: Math.max(...spans.map((span) => span.fontSize)),
+      spanIds: spans.map((span) => span.id),
+    }
+  }
+
   function snapCoordinateToTextTargets(value: number, candidates: number[], threshold: number) {
     let snappedValue = value
     let closestDistance = threshold + Number.EPSILON
@@ -2424,6 +2460,43 @@
     })
   }
 
+  function resolveSelectedTextOccurrence() {
+    if (!selectedTextSpan || selectedTextSpan.spanIds.length === 0) {
+      return 0
+    }
+
+    const selectedSequenceLength = selectedTextSpan.spanIds.length
+    const selectedSequenceText = selectedTextSpans
+      .map((span) => span.text.trim())
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+    let occurrenceIndex = 0
+
+    for (let index = 0; index <= currentPageTextSpans.length - selectedSequenceLength; index += 1) {
+      const sequence = currentPageTextSpans.slice(index, index + selectedSequenceLength)
+      const sequenceText = sequence
+        .map((span) => span.text.trim())
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+
+      if (sequenceText !== selectedSequenceText) {
+        continue
+      }
+
+      const isActiveSelection = sequence.every((span, sequenceIndex) => span.id === selectedTextSpan.spanIds[sequenceIndex])
+      if (isActiveSelection) {
+        return occurrenceIndex
+      }
+
+      occurrenceIndex += 1
+    }
+
+    return 0
+  }
+
   function resolveTextEditLayout() {
     const xPercent = parseBoundedNumber(textEditX, 'Edit X', 0, 95)
     const yPercent = parseBoundedNumber(textEditY, 'Edit Y', 0, 95)
@@ -2508,7 +2581,8 @@
   }
 
   function clearSelectedTextTarget() {
-    selectedTextSpanId = null
+    selectedTextSpanIds = []
+    selectedTextAnchorId = null
     inlineTextEditorOpen = false
     textTargetDragSession = null
   }
@@ -2554,17 +2628,50 @@
     return closestTone
   }
 
-  async function selectTextTarget(span: PdfPageTextSpan, options: { focusEditor?: boolean } = {}) {
-    selectedTextSpanId = span.id
+  async function selectTextTarget(
+    span: PdfPageTextSpan,
+    options: { focusEditor?: boolean; extendSelection?: boolean } = {},
+  ) {
+    const spanIndex = currentPageTextSpans.findIndex((candidate) => candidate.id === span.id)
+    if (spanIndex < 0) {
+      return
+    }
+
+    let nextSelection = [span]
+    if (options.extendSelection && selectedTextAnchorId) {
+      const anchorIndex = currentPageTextSpans.findIndex((candidate) => candidate.id === selectedTextAnchorId)
+      if (anchorIndex >= 0) {
+        const start = Math.min(anchorIndex, spanIndex)
+        const end = Math.max(anchorIndex, spanIndex)
+        nextSelection = currentPageTextSpans.slice(start, end + 1)
+      } else {
+        selectedTextAnchorId = span.id
+      }
+    } else {
+      selectedTextAnchorId = span.id
+    }
+
+    selectedTextSpanIds = nextSelection.map((candidate) => candidate.id)
     inlineTextEditorOpen = true
-    textEditContent = span.text
-    applyTextEditRegion({
-      xPercent: span.xPercent,
-      yPercent: span.yPercent,
-      widthPercent: Math.max(span.widthPercent, 5),
-      heightPercent: Math.max(span.heightPercent, 5),
-      fontSize: span.fontSize,
-    })
+    const nextTarget = buildSelectedTextTarget(nextSelection)
+    textEditContent = nextTarget?.text ?? span.text
+    applyTextEditRegion(
+      nextTarget
+        ? {
+            xPercent: nextTarget.xPercent,
+            yPercent: nextTarget.yPercent,
+            widthPercent: Math.max(nextTarget.widthPercent, 5),
+            heightPercent: Math.max(nextTarget.heightPercent, 5),
+            fontSize: nextTarget.fontSize,
+          }
+        : {
+            xPercent: span.xPercent,
+            yPercent: span.yPercent,
+            widthPercent: Math.max(span.widthPercent, 5),
+            heightPercent: Math.max(span.heightPercent, 5),
+            fontSize: span.fontSize,
+          },
+    )
     textEditAlignment = 'left'
 
     if (options.focusEditor ?? true) {
@@ -3292,9 +3399,13 @@
               Strike Out Text
             </button>
           </div>
+          <span class="muted">Shift-click adjacent targets to grow the selection like an inline text range.</span>
           {#if selectedTextSpan}
             <div class="stack-list attachment-entry">
               <span>Selected: {selectedTextSpan.text}</span>
+              {#if selectedTextSpan.spanIds.length > 1}
+                <span>{selectedTextSpan.spanIds.length} contiguous targets selected</span>
+              {/if}
               <span>
                 Region: {selectedTextSpan.xPercent.toFixed(1)}%, {selectedTextSpan.yPercent.toFixed(1)}%,
                 {selectedTextSpan.widthPercent.toFixed(1)}% x {selectedTextSpan.heightPercent.toFixed(1)}%
@@ -3568,13 +3679,13 @@
                   {#each currentPageTextSpans as span}
                     <button
                       type="button"
-                      class:selected={span.id === selectedTextSpanId}
+                      class:selected={selectedTextSpanIds.includes(span.id)}
                       class="text-target-hitbox"
                       style:left={`${span.xPercent}%`}
                       style:top={`${span.yPercent}%`}
                       style:width={`${span.widthPercent}%`}
                       style:height={`${Math.max(span.heightPercent, 0.8)}%`}
-                      on:click={() => void selectTextTarget(span)}
+                      on:click={(event) => void selectTextTarget(span, { extendSelection: event.shiftKey })}
                       aria-label={`Target text: ${span.text}`}
                       title={`Edit text: ${span.text}`}
                     ></button>

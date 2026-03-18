@@ -937,6 +937,35 @@ describe('Sampadan desktop app regression suite', () => {
     expect(Number.parseFloat(heightInput.value)).toBeGreaterThan(5)
   })
 
+  test('extends the direct text selection across contiguous targets with shift-click', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect((screen.getByTestId('toggle-text-target-button') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    await user.click(screen.getByTestId('toggle-text-target-button'))
+    await waitFor(() => {
+      expect(screen.getByLabelText('Target text: Page')).toBeTruthy()
+      expect(screen.getByLabelText('Target text: line')).toBeTruthy()
+    })
+
+    await user.click(screen.getByLabelText('Target text: Page'))
+    await fireEvent.click(screen.getByLabelText('Target text: line'), { shiftKey: true })
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: Page 1 line')).toBeTruthy()
+      expect(screen.getByText('3 contiguous targets selected')).toBeTruthy()
+    })
+
+    expect((screen.getByLabelText('Quick Replace Text') as HTMLTextAreaElement).value).toBe('Page 1 line')
+    expect(Number.parseFloat((screen.getByLabelText('Width %') as HTMLInputElement).value)).toBeCloseTo(24, 1)
+  })
+
   test('adds true PDF annotations from the selected text flow', async () => {
     openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
 
