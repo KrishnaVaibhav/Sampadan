@@ -110,13 +110,13 @@ export async function splitDocumentIntoSinglePages(bytes: Uint8Array) {
 
 export async function readMetadataFromDocument(bytes: Uint8Array): Promise<PdfMetadataDraft> {
   const document = await loadDocument(bytes)
-  const keywords = document.getKeywords()
+  const keywords = normalizeKeywordsForDraft(document.getKeywords())
 
   return {
     title: document.getTitle() ?? '',
     author: document.getAuthor() ?? '',
     subject: document.getSubject() ?? '',
-    keywords: Array.isArray(keywords) ? keywords.join(', ') : '',
+    keywords,
     creator: document.getCreator() ?? '',
     producer: document.getProducer() ?? '',
   }
@@ -129,12 +129,36 @@ export async function applyMetadataToDocument(bytes: Uint8Array, metadata: PdfMe
     .map((value) => value.trim())
     .filter(Boolean)
 
-  if (metadata.title.trim()) document.setTitle(metadata.title.trim())
-  if (metadata.author.trim()) document.setAuthor(metadata.author.trim())
-  if (metadata.subject.trim()) document.setSubject(metadata.subject.trim())
-  if (keywords.length > 0) document.setKeywords(keywords)
-  if (metadata.creator.trim()) document.setCreator(metadata.creator.trim())
-  if (metadata.producer.trim()) document.setProducer(metadata.producer.trim())
+  document.setTitle(metadata.title.trim())
+  document.setAuthor(metadata.author.trim())
+  document.setSubject(metadata.subject.trim())
+  document.setKeywords(keywords)
+  document.setCreator(metadata.creator.trim())
+  document.setProducer(metadata.producer.trim())
 
   return saveDocument(document)
+}
+
+function normalizeKeywordsForDraft(value: string | string[] | undefined) {
+  if (Array.isArray(value)) {
+    return value.join(', ')
+  }
+
+  if (typeof value !== 'string') {
+    return ''
+  }
+
+  const normalized = value.trim()
+  if (!normalized) {
+    return ''
+  }
+
+  if (normalized.includes(',')) {
+    return normalized
+  }
+
+  return normalized
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(', ')
 }

@@ -1158,7 +1158,7 @@
 
   <main class="workspace">
     <header class="topbar card compact-card">
-      <div>
+      <div class="topbar-copy">
         <span class="eyebrow">Viewer Focus</span>
         <h2>{workspace ? workspace.fileName : 'No PDF loaded'}</h2>
       </div>
@@ -1176,18 +1176,29 @@
     </header>
 
     <section class="toolbar card compact-card">
-      <button on:click={() => goToPage(currentPage - 1)} disabled={busy || !workspace}>Prev</button>
-      <button on:click={() => goToPage(currentPage + 1)} disabled={busy || !workspace}>Next</button>
-      <button on:click={() => zoomBy(-0.15)} disabled={busy || !workspace}>-</button>
-      <button on:click={() => zoomBy(0.15)} disabled={busy || !workspace}>+</button>
-      <button on:click={fitToPane} disabled={busy || !workspace}>Fit Width</button>
-      <span class="zoom-pill">{currentZoomLabel}</span>
-      <button on:click={() => rotateCurrentPage(-90)} disabled={busy || !workspace}>Rotate Left</button>
-      <button on:click={() => rotateCurrentPage(90)} disabled={busy || !workspace}>Rotate Right</button>
-      <button on:click={() => moveCurrentPage(-1)} disabled={busy || !workspace}>Move Left</button>
-      <button on:click={() => moveCurrentPage(1)} disabled={busy || !workspace}>Move Right</button>
-      <button on:click={extractCurrentPage} disabled={busy || !workspace}>Extract Page</button>
-      <button on:click={exportCurrentPagePng} disabled={busy || !workspace}>Export PNG</button>
+      <div class="toolbar-group">
+        <button on:click={() => goToPage(currentPage - 1)} disabled={busy || !workspace}>Prev</button>
+        <button on:click={() => goToPage(currentPage + 1)} disabled={busy || !workspace}>Next</button>
+      </div>
+
+      <div class="toolbar-group">
+        <button on:click={() => zoomBy(-0.15)} disabled={busy || !workspace}>-</button>
+        <button on:click={() => zoomBy(0.15)} disabled={busy || !workspace}>+</button>
+        <button on:click={fitToPane} disabled={busy || !workspace}>Fit Width</button>
+        <span class="zoom-pill">{currentZoomLabel}</span>
+      </div>
+
+      <div class="toolbar-group">
+        <button on:click={() => rotateCurrentPage(-90)} disabled={busy || !workspace}>Rotate Left</button>
+        <button on:click={() => rotateCurrentPage(90)} disabled={busy || !workspace}>Rotate Right</button>
+        <button on:click={() => moveCurrentPage(-1)} disabled={busy || !workspace}>Move Left</button>
+        <button on:click={() => moveCurrentPage(1)} disabled={busy || !workspace}>Move Right</button>
+      </div>
+
+      <div class="toolbar-group toolbar-group-strong">
+        <button on:click={extractCurrentPage} disabled={busy || !workspace}>Extract Page</button>
+        <button on:click={exportCurrentPagePng} disabled={busy || !workspace}>Export PNG</button>
+      </div>
     </section>
 
     <section class="viewer-stage">

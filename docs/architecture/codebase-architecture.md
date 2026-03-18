@@ -56,6 +56,7 @@ Owns:
 
 - application shell
 - viewer-first layout and responsive shell composition
+- grouped toolbar lanes that keep navigation, zoom, edit, and export controls aligned
 - toolbar and page controls
 - canvas viewer host
 - user workflow state
@@ -199,6 +200,12 @@ These are the modules the codebase should grow into instead of adding more logic
   OCR status probing and native OCR text/PDF invocation bridge
 - `src/App.test.ts`
   regression suite for critical desktop UI actions and trust/OCR flows
+- `src/App.workflow.test.ts`
+  real-PDF workflow regression for open, mutate, metadata, save, merge, and export paths
+- `src/test/pdf-fixtures.ts`
+  generated real-PDF fixtures and document summary helpers used by regression tests
+- `src/lib/operations/pdf-document.test.ts`
+  real-byte coverage for structural edits and metadata round-trips
 - `src/lib/conversion/`
   PNG export, image pipelines, later DOCX/HTML export adapters
 - `src/lib/components/`
@@ -286,6 +293,7 @@ Status on March 18, 2026:
 - signer certificate inventory implemented through local OpenSSL
 - local CA-store certificate-chain trust attempts implemented
 - regression tests now cover critical viewer, OCR, trust, edit, and export controls
+- real-PDF regression coverage now exercises open, reorder, duplicate, delete, blank-page insert, extract, metadata apply, save, merge, and export flows
 - revocation, timestamp authority validation depth, and write-side encryption controls still pending
 
 ### Milestone 4

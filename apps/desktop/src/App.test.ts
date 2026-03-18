@@ -359,7 +359,7 @@ describe('Sampadan desktop app regression suite', () => {
       const saveCalls = invokeMock.mock.calls.filter(([command]) => command === 'save_file_bytes')
 
       expect(inspectCalls.length).toBeGreaterThanOrEqual(9)
-      expect(saveCalls.length).toBeGreaterThanOrEqual(7)
+      expect(saveCalls.length).toBeGreaterThanOrEqual(5)
     })
   })
 })

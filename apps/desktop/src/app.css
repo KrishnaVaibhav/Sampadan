@@ -47,6 +47,7 @@ body,
 
 body {
   min-width: 320px;
+  min-height: 100vh;
 }
 
 button,
@@ -82,15 +83,20 @@ button:disabled {
 
 .shell {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 240px;
+  grid-template-columns: minmax(0, 1fr) clamp(228px, 18vw, 264px);
   gap: 1.25rem;
   min-height: 100vh;
+  max-width: 1880px;
+  margin: 0 auto;
   padding: 1.25rem;
+  align-items: start;
 }
 
 .rail,
 .workspace {
   min-height: 0;
+  min-width: 0;
+  width: 100%;
 }
 
 .rail {
@@ -276,9 +282,9 @@ button:disabled {
 }
 
 .topbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
   gap: 1rem;
 }
 
@@ -287,8 +293,11 @@ button:disabled {
   margin-top: 0.25rem;
 }
 
+.topbar-copy {
+  min-width: 0;
+}
+
 .topbar-pills,
-.toolbar,
 .flag-grid,
 .stack-list,
 .export-list,
@@ -300,8 +309,30 @@ button:disabled {
 }
 
 .toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
   align-items: center;
   padding-block: 0.85rem;
+  gap: 0.75rem;
+}
+
+.toolbar-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.toolbar-group + .toolbar-group {
+  padding-left: 0.85rem;
+  border-left: 1px solid var(--border);
+}
+
+.toolbar-group-strong {
+  margin-left: auto;
+  justify-content: flex-end;
 }
 
 .zoom-pill {
@@ -312,10 +343,11 @@ button:disabled {
 
 .viewer-stage {
   display: grid;
-  grid-template-columns: 96px minmax(0, 1fr);
+  grid-template-columns: 88px minmax(0, 1fr);
   gap: 1rem;
   min-height: 0;
   flex: 1;
+  align-items: stretch;
 }
 
 .page-strip,
@@ -327,6 +359,7 @@ button:disabled {
 .page-strip {
   display: flex;
   flex-direction: column;
+  max-height: clamp(32rem, 72vh, 70rem);
 }
 
 .page-list {
@@ -449,6 +482,7 @@ button:disabled {
 .viewer-shell {
   display: flex;
   flex-direction: column;
+  min-height: clamp(32rem, 72vh, 70rem);
 }
 
 .viewer-pane,
@@ -472,7 +506,7 @@ button:disabled {
 }
 
 .hero-viewer .viewer-pane {
-  min-height: min(76vh, 1080px);
+  min-height: clamp(30rem, 68vh, 66rem);
 }
 
 .empty-state {
@@ -577,7 +611,7 @@ button:disabled {
 
 @media (max-width: 1320px) {
   .shell {
-    grid-template-columns: minmax(0, 1fr) 220px;
+    grid-template-columns: minmax(0, 1fr) clamp(212px, 19vw, 240px);
   }
 
   .viewer-stage {
@@ -605,8 +639,21 @@ button:disabled {
   }
 
   .topbar {
-    flex-direction: column;
-    align-items: flex-start;
+    grid-template-columns: 1fr;
+  }
+
+  .toolbar {
+    justify-content: flex-start;
+  }
+
+  .toolbar-group + .toolbar-group {
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .toolbar-group-strong {
+    margin-left: 0;
+    justify-content: flex-start;
   }
 
   .field-grid {
