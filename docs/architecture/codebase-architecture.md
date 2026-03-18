@@ -162,7 +162,8 @@ Planned split:
 1. Frontend uses `PDF.js` text geometry to target existing born-digital text or a manual page position.
 2. The annotation module writes true PDF annotations into the page `Annots` array locally through `pdf-lib`.
 3. The viewer extracts current-page annotations back out of the PDF so highlights and sticky notes stay visible inside Sampadan's overlay layer.
-4. Saved PDFs preserve those annotations for other readers instead of flattening them into page content by default.
+4. The rail exposes current-page annotation entries so users can inspect and remove them locally.
+5. Saved PDFs preserve those annotations for other readers instead of flattening them into page content by default.
 
 ### Fill Standard Forms
 
@@ -241,7 +242,7 @@ These are the modules the codebase should grow into instead of adding more logic
 - `src/lib/operations/pdf-document.ts`
   merge, insert, rotate, extract, reorder, split, watermark, image stamping, review notes, true page-edit overlays, restricted content-stream text rewrites, text-targeted replacement fallback, embedded attachments, page numbering, metadata, and export helpers
 - `src/lib/operations/pdf-annotations.ts`
-  true sticky-note and text-markup PDF annotation writes for highlights, underlines, and strikeouts
+  true sticky-note and text-markup PDF annotation writes plus current-page annotation removal
 - `src/lib/operations/pdf-forms.ts`
   standard AcroForm field discovery, field-value application, and form flattening
 - `src/lib/types.ts`
@@ -351,6 +352,7 @@ Status on March 18, 2026:
 - encrypted-PDF unlock into editable workspace implemented through local qpdf
 - true page editing implemented through positioned text-block and whiteout-replace PDF mutations
 - true PDF annotation support implemented for sticky notes plus highlight, underline, and strikeout markup
+- current-page annotation management and removal implemented in the desktop rail
 - text-targeted replacement implemented from PDF.js-extracted page text geometry for born-digital PDFs
 - restricted content-stream rewrite implemented for width-safe `Tj`, split `Tj`/`TJ` sequences, `TJ`, and line-show text operators on simple standard-font born-digital PDFs, with automatic overlay fallback on harder documents
 - Markdown, HTML, and DOCX conversion/export implemented locally from extracted PDF text

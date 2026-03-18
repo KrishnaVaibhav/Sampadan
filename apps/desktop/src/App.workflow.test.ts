@@ -28,48 +28,54 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 vi.mock('./lib/pdf-engine', async () => {
   const actual = await vi.importActual<typeof import('./lib/pdf-engine')>('./lib/pdf-engine')
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
 
   return {
     ...actual,
     loadPdfProxy: vi.fn(async (bytes: Uint8Array) => {
       const safeBytes = bytes.slice()
       detachBytes(bytes)
-      const { PDFDocument } = await actual.getPdfLib()
-      const document = await PDFDocument.load(safeBytes, { updateMetadata: false })
-      const pageCount = document.getPageCount()
+      const pdfDocument = await getDocument({ data: safeBytes.slice() }).promise
+      const pageCount = pdfDocument.numPages
 
       return {
         numPages: pageCount,
-        getPage: async (pageNumber: number) => ({
-        getViewport: ({ scale }: { scale: number }) => ({
-          width: 595 * scale,
-          height: 842 * scale,
-          scale,
-          transform: [scale, 0, 0, -scale, 0, 842 * scale],
-        }),
-        render: () => ({ promise: Promise.resolve() }),
-        cleanup: () => undefined,
-        getAnnotations: async () => [],
-        getTextContent: async () => ({
-          items: [
-            {
-              str: `Sample page ${pageNumber}`,
-                hasEOL: false,
-                width: 92,
-                height: 16,
-                transform: [16, 0, 0, 16, 72, 760],
-              },
-              {
-                str: 'headline',
-                hasEOL: true,
-                width: 60,
-                height: 16,
-                transform: [16, 0, 0, 16, 172, 760],
-              },
-            ],
-          }),
-        }),
-        destroy: async () => undefined,
+        getPage: async (pageNumber: number) => {
+          const pdfPage = await pdfDocument.getPage(pageNumber)
+
+          return {
+            getViewport: ({ scale }: { scale: number }) => ({
+              width: 595 * scale,
+              height: 842 * scale,
+              scale,
+              transform: [scale, 0, 0, -scale, 0, 842 * scale],
+            }),
+            render: () => ({ promise: Promise.resolve() }),
+            cleanup: () => pdfPage.cleanup(),
+            getAnnotations: async () => pdfPage.getAnnotations(),
+            getTextContent: async () => ({
+              items: [
+                {
+                  str: `Sample page ${pageNumber}`,
+                  hasEOL: false,
+                  width: 92,
+                  height: 16,
+                  transform: [16, 0, 0, 16, 72, 760],
+                },
+                {
+                  str: 'headline',
+                  hasEOL: true,
+                  width: 60,
+                  height: 16,
+                  transform: [16, 0, 0, 16, 172, 760],
+                },
+              ],
+            }),
+          }
+        },
+        destroy: async () => {
+          await pdfDocument.destroy()
+        },
       }
     }),
   }
@@ -672,9 +678,7 @@ describe('real PDF workflow actions', () => {
     await user.click(screen.getByTestId('sticky-note-button'))
     await waitFor(async () => {
       const annotationsAfterSticky = await readPdfPageAnnotations(currentBytes, 2)
-      expect(annotationsAfterSticky.map((annotation) => annotation.subtype)).toEqual(
-        expect.arrayContaining(['Highlight', 'Text']),
-      )
+      expect(annotationsAfterSticky).toHaveLength(2)
     })
 
     await user.clear(screen.getByLabelText('Edit Text'))

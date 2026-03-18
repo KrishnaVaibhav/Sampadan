@@ -23,6 +23,11 @@ type TextMarkupOptions = {
   contents?: string
 }
 
+type RemoveAnnotationOptions = {
+  pageIndex: number
+  annotationId: string
+}
+
 async function loadDocument(bytes: Uint8Array) {
   const { PDFDocument } = await getPdfLib()
   return PDFDocument.load(bytes.slice(), { updateMetadata: false })
@@ -127,6 +132,27 @@ function buildAnnotationName(prefix: string) {
   return `Sampadan-${prefix}-${Date.now()}-${Math.round(Math.random() * 1_000_000)}`
 }
 
+function parseAnnotationRefId(annotationId: string) {
+  const normalized = annotationId.trim()
+  const simpleMatch = normalized.match(/^(\d+)R$/)
+  if (simpleMatch) {
+    return {
+      objectNumber: Number.parseInt(simpleMatch[1], 10),
+      generationNumber: 0,
+    }
+  }
+
+  const extendedMatch = normalized.match(/^(\d+)R(\d+)$/)
+  if (extendedMatch) {
+    return {
+      objectNumber: Number.parseInt(extendedMatch[1], 10),
+      generationNumber: Number.parseInt(extendedMatch[2], 10),
+    }
+  }
+
+  return null
+}
+
 export async function addStickyNoteAnnotationToDocument(bytes: Uint8Array, options: StickyNoteOptions) {
   const pdfLib = await getPdfLib()
   const { PDFName, PDFString, AnnotationFlags } = pdfLib
@@ -227,5 +253,26 @@ export async function addTextMarkupAnnotationToDocument(bytes: Uint8Array, optio
   })
 
   page.node.addAnnot(context.register(annotation))
+  return saveDocument(document)
+}
+
+export async function removeAnnotationFromDocument(bytes: Uint8Array, options: RemoveAnnotationOptions) {
+  const pdfLib = await getPdfLib()
+  const { PDFRef } = pdfLib
+  const document = await loadDocument(bytes)
+
+  if (options.pageIndex < 0 || options.pageIndex >= document.getPageCount()) {
+    throw new Error('Choose a valid page before removing the annotation.')
+  }
+
+  const parsedRef = parseAnnotationRefId(options.annotationId)
+  if (!parsedRef) {
+    throw new Error('Sampadan could not resolve the selected annotation reference.')
+  }
+
+  const page = document.getPage(options.pageIndex)
+  const annotRef = PDFRef.of(parsedRef.objectNumber, parsedRef.generationNumber)
+  page.node.removeAnnot(annotRef)
+
   return saveDocument(document)
 }

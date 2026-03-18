@@ -19,6 +19,7 @@
     addStickyNoteAnnotationToDocument,
     addTextMarkupAnnotationToDocument,
     type PdfMarkupAnnotationKind,
+    removeAnnotationFromDocument,
   } from './lib/operations/pdf-annotations'
   import {
     addAttachmentToDocument,
@@ -190,6 +191,8 @@
   let thumbnails: PageThumbnail[] = []
   let currentPageTextSpans: PdfPageTextSpan[] = []
   let currentPageAnnotations: PdfPageAnnotationOverlay[] = []
+  let selectedAnnotationId: string | null = null
+  let selectedAnnotation: PdfPageAnnotationOverlay | null = null
   let selectedTextSpanId: string | null = null
   let selectedTextSpan: PdfPageTextSpan | null = null
   let textTargetMode = false
@@ -237,6 +240,7 @@
   $: currentZoomLabel = `${Math.round(zoom * 100)}%`
   $: activeDocumentName = workspace?.fileName ?? pendingEncryptedPdf?.payload.fileName ?? 'No PDF loaded'
   $: viewerStatusLabel = workspace ? `Page ${currentPage} of ${workspace.pageCount}` : pendingEncryptedPdf ? 'Locked until unlocked' : 'Idle'
+  $: selectedAnnotation = currentPageAnnotations.find((annotation) => annotation.id === selectedAnnotationId) ?? null
   $: selectedTextSpan = currentPageTextSpans.find((span) => span.id === selectedTextSpanId) ?? null
   $: thumbnailMap = new Map(thumbnails.map((thumbnail) => [thumbnail.pageNumber, thumbnail]))
   $: ocrAvailableLanguages = ocrStatus?.languages ?? []
@@ -1582,6 +1586,37 @@
     })
   }
 
+  async function removeSelectedAnnotation() {
+    if (!selectedAnnotation) return
+    await removeAnnotation(selectedAnnotation)
+  }
+
+  async function removeAnnotation(annotation: PdfPageAnnotationOverlay) {
+    if (!workspace || busy) return
+
+    const currentWorkspace = workspace
+    const label =
+      annotation.kind === 'strikeout'
+        ? 'strikeout annotation'
+        : annotation.kind === 'underline'
+          ? 'underline annotation'
+          : annotation.kind === 'highlight'
+            ? 'highlight annotation'
+            : 'sticky note annotation'
+
+    await runDocumentMutation({
+      workingStatus: `Removing ${label} from page ${currentPage}`,
+      successStatus: `Removed ${label} from page ${currentPage}`,
+      errorStatus: `Failed to remove the selected ${label}`,
+      nextCurrentPage: currentPage,
+      mutate: () =>
+        removeAnnotationFromDocument(currentWorkspace.bytes, {
+          pageIndex: currentPage - 1,
+          annotationId: annotation.id,
+        }),
+    })
+  }
+
   async function runDocumentMutation(options: {
     workingStatus: string
     successStatus: string
@@ -1712,6 +1747,7 @@
     thumbnails = []
     currentPageTextSpans = []
     currentPageAnnotations = []
+    selectedAnnotationId = null
     selectedTextSpanId = null
     renderedPageWidth = 0
     renderedPageHeight = 0
@@ -1742,6 +1778,7 @@
     thumbnails = []
     currentPageTextSpans = []
     currentPageAnnotations = []
+    selectedAnnotationId = null
     selectedTextSpanId = null
     renderedPageWidth = 0
     renderedPageHeight = 0
@@ -1885,6 +1922,7 @@
   async function refreshCurrentPageAnnotations(pageNumber: number, scale: number, renderId: number) {
     if (!pdfProxy || !workspace) {
       currentPageAnnotations = []
+      selectedAnnotationId = null
       return
     }
 
@@ -1901,9 +1939,13 @@
       }
 
       currentPageAnnotations = annotations
+      if (!annotations.some((annotation) => annotation.id === selectedAnnotationId)) {
+        selectedAnnotationId = null
+      }
     } catch {
       if (nextAnnotationToken === annotationToken) {
         currentPageAnnotations = []
+        selectedAnnotationId = null
       }
     }
   }
@@ -2194,6 +2236,14 @@
 
   function clearSelectedTextTarget() {
     selectedTextSpanId = null
+  }
+
+  function selectAnnotation(annotation: PdfPageAnnotationOverlay) {
+    selectedAnnotationId = annotation.id
+  }
+
+  function clearSelectedAnnotation() {
+    selectedAnnotationId = null
   }
 
   function selectTextTarget(span: PdfPageTextSpan) {
@@ -2706,6 +2756,54 @@
 
         <div class="inspector-block">
           <div class="section-head compact-head">
+            <h3>Current Page Annotations</h3>
+            <span class="pill">{currentPageAnnotations.length}</span>
+          </div>
+          {#if currentPageAnnotations.length > 0}
+            <div class="annotation-list">
+              {#each currentPageAnnotations as annotation, index}
+                <div
+                  class:selected={annotation.id === selectedAnnotationId}
+                  class="stack-list attachment-entry annotation-entry"
+                >
+                  <button
+                    class="annotation-select"
+                    on:click={() => selectAnnotation(annotation)}
+                    aria-label={`Select annotation ${index + 1}`}
+                  >
+                    <span class="annotation-kind">{annotation.kind === 'text' ? 'Sticky note' : annotation.kind}</span>
+                    <span>{annotation.title ?? 'Sampadan'}</span>
+                    <span>{annotation.contents || 'No annotation text'}</span>
+                  </button>
+                  <button
+                    class="ghost-button"
+                    data-testid={`remove-annotation-button-${index + 1}`}
+                    on:click={() => void removeAnnotation(annotation)}
+                    disabled={busy}
+                    aria-label={`Remove annotation ${index + 1}`}
+                  >
+                    Remove Annotation
+                  </button>
+                </div>
+              {/each}
+            </div>
+            <div class="tool-grid">
+              <button
+                data-testid="remove-selected-annotation-button"
+                on:click={removeSelectedAnnotation}
+                disabled={busy || !workspace || !selectedAnnotation}
+              >
+                Remove Selected Annotation
+              </button>
+              <button on:click={clearSelectedAnnotation} disabled={busy || !selectedAnnotation}>Clear Annotation Selection</button>
+            </div>
+          {:else}
+            <span class="muted">No annotations on the current page yet.</span>
+          {/if}
+        </div>
+
+        <div class="inspector-block">
+          <div class="section-head compact-head">
             <h3>Target Existing Text</h3>
             <span class="pill">{currentPageTextSpans.length}</span>
           </div>
@@ -2994,6 +3092,7 @@
                   {#each currentPageAnnotations as annotation}
                     {#if annotation.kind === 'text'}
                       <div
+                        class:selected={annotation.id === selectedAnnotationId}
                         class="annotation-note"
                         title={formatAnnotationTooltip(annotation)}
                         style={`left:${annotation.xPercent}%;top:${annotation.yPercent}%;--annotation-color:${annotation.colorCss};`}
@@ -3003,6 +3102,7 @@
                     {:else}
                       {#each annotation.quads.length > 0 ? annotation.quads : [annotation] as quad}
                         <div
+                          class:selected={annotation.id === selectedAnnotationId}
                           class={`annotation-mark annotation-mark-${annotation.kind}`}
                           title={formatAnnotationTooltip(annotation)}
                           style={`left:${quad.xPercent}%;top:${quad.yPercent}%;width:${Math.max(quad.widthPercent, 0.6)}%;height:${Math.max(quad.heightPercent, 0.4)}%;--annotation-color:${annotation.colorCss};--annotation-opacity:${annotation.opacity};`}

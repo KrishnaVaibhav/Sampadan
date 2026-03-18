@@ -2,7 +2,11 @@ import { describe, expect, test } from 'vitest'
 
 import { createSamplePdf, readPdfPageAnnotations, readPdfSummary } from '../../test/pdf-fixtures'
 
-import { addStickyNoteAnnotationToDocument, addTextMarkupAnnotationToDocument } from './pdf-annotations'
+import {
+  addStickyNoteAnnotationToDocument,
+  addTextMarkupAnnotationToDocument,
+  removeAnnotationFromDocument,
+} from './pdf-annotations'
 
 describe('real PDF annotation operations', () => {
   test('adds sticky note and text markup annotations to real PDF bytes', async () => {
@@ -58,5 +62,19 @@ describe('real PDF annotation operations', () => {
     )
     expect(annotations.find((annotation) => annotation.subtype === 'Text')?.contents).toContain('Double-check')
     expect(annotations.find((annotation) => annotation.subtype === 'Highlight')?.title).toBe('Editor Review')
+
+    const stickyNote = annotations.find((annotation) => annotation.subtype === 'Text')
+    expect(stickyNote?.id).toBeTruthy()
+
+    const removedStickyNote = await removeAnnotationFromDocument(annotated, {
+      pageIndex: 0,
+      annotationId: stickyNote!.id,
+    })
+
+    const annotationsAfterRemoval = await readPdfPageAnnotations(removedStickyNote, 1)
+    expect(annotationsAfterRemoval.map((annotation) => annotation.subtype)).toEqual(
+      expect.arrayContaining(['Highlight', 'Underline', 'StrikeOut']),
+    )
+    expect(annotationsAfterRemoval.map((annotation) => annotation.subtype)).not.toContain('Text')
   })
 })

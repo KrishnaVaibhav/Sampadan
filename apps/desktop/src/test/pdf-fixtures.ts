@@ -1,6 +1,7 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
 
 export interface PdfAnnotationFixtureSummary {
+  id: string
   subtype: string
   contents: string
   title: string | null
@@ -255,6 +256,7 @@ export async function readPdfPageAnnotations(bytes: Uint8Array, pageNumber: numb
     return (annotations as Array<{ subtype?: string; contentsObj?: { str?: string }; titleObj?: { str?: string } }>).map(
       (annotation) =>
         ({
+          id: String((annotation as { id?: unknown }).id ?? ''),
           subtype: annotation.subtype ?? 'Unknown',
           contents: annotation.contentsObj?.str ?? '',
           title: annotation.titleObj?.str ?? null,

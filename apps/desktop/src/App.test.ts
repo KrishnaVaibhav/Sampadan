@@ -123,6 +123,7 @@ vi.mock('./lib/operations/pdf-document', () => ({
 vi.mock('./lib/operations/pdf-annotations', () => ({
   addStickyNoteAnnotationToDocument: vi.fn(async () => Uint8Array.from([9, 9, 1])),
   addTextMarkupAnnotationToDocument: vi.fn(async () => Uint8Array.from([9, 9, 2])),
+  removeAnnotationFromDocument: vi.fn(async () => Uint8Array.from([9, 9, 3])),
 }))
 
 vi.mock('./lib/operations/pdf-forms', () => ({
@@ -783,6 +784,25 @@ describe('Sampadan desktop app regression suite', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Added sticky note annotation to page 1')).toBeTruthy()
+    })
+  })
+
+  test('removes a selected page annotation through the local mutation pipeline', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect(screen.getByText('Current Page Annotations')).toBeTruthy()
+      expect(screen.getByRole('button', { name: /Remove annotation/i })).toBeTruthy()
+    })
+
+    await user.click(screen.getByRole('button', { name: /Remove annotation/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Removed highlight annotation from page 1')).toBeTruthy()
     })
   })
 

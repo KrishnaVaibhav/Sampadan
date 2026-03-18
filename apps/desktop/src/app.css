@@ -603,6 +603,45 @@ button:disabled {
   z-index: 1;
 }
 
+.annotation-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.annotation-entry {
+  gap: 0.5rem;
+}
+
+.annotation-entry.selected {
+  border-color: rgba(99, 178, 255, 0.38);
+  background: rgba(29, 42, 58, 0.86);
+}
+
+.annotation-select {
+  display: grid;
+  gap: 0.2rem;
+  justify-items: start;
+  text-align: left;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.annotation-select:hover:not(:disabled) {
+  transform: none;
+  border: 0;
+  background: transparent;
+}
+
+.annotation-kind {
+  text-transform: capitalize;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  color: rgba(247, 215, 138, 0.92);
+}
+
 .annotation-mark {
   position: absolute;
   pointer-events: none;
@@ -631,6 +670,10 @@ button:disabled {
   transform: translateY(-50%);
 }
 
+.annotation-mark.selected {
+  box-shadow: 0 0 0 2px rgba(99, 178, 255, 0.9);
+}
+
 .annotation-note {
   position: absolute;
   width: 1.35rem;
@@ -645,6 +688,10 @@ button:disabled {
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.24);
   pointer-events: none;
   z-index: 2;
+}
+
+.annotation-note.selected {
+  box-shadow: 0 0 0 2px rgba(99, 178, 255, 0.9), 0 6px 16px rgba(0, 0, 0, 0.24);
 }
 
 .text-target-layer {
