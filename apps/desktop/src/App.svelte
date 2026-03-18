@@ -336,6 +336,54 @@
         return
       }
 
+      if (textTargetMode && currentPageTextSpans.length > 0 && !textInputTarget && modifier && event.key.toLowerCase() === 'a') {
+        event.preventDefault()
+        void selectAllTextTargets()
+        return
+      }
+
+      if (textTargetMode && selectedTextSpan && !textInputTarget && event.altKey && event.key === 'ArrowLeft') {
+        event.preventDefault()
+        event.shiftKey ? resizeSelectedTextRegion(-1, 0) : nudgeSelectedTextRegion(-0.6, 0)
+        return
+      }
+
+      if (textTargetMode && selectedTextSpan && !textInputTarget && event.altKey && event.key === 'ArrowRight') {
+        event.preventDefault()
+        event.shiftKey ? resizeSelectedTextRegion(1, 0) : nudgeSelectedTextRegion(0.6, 0)
+        return
+      }
+
+      if (textTargetMode && selectedTextSpan && !textInputTarget && event.altKey && event.key === 'ArrowUp') {
+        event.preventDefault()
+        event.shiftKey ? resizeSelectedTextRegion(0, -0.6) : nudgeSelectedTextRegion(0, -0.6)
+        return
+      }
+
+      if (textTargetMode && selectedTextSpan && !textInputTarget && event.altKey && event.key === 'ArrowDown') {
+        event.preventDefault()
+        event.shiftKey ? resizeSelectedTextRegion(0, 0.6) : nudgeSelectedTextRegion(0, 0.6)
+        return
+      }
+
+      if (!modifier && textTargetMode && currentPageTextSpans.length > 0 && !textInputTarget && event.key === 'Home') {
+        event.preventDefault()
+        void jumpTextTargetSelection('start', event.shiftKey)
+        return
+      }
+
+      if (!modifier && textTargetMode && currentPageTextSpans.length > 0 && !textInputTarget && event.key === 'End') {
+        event.preventDefault()
+        void jumpTextTargetSelection('end', event.shiftKey)
+        return
+      }
+
+      if (!modifier && textTargetMode && currentPageTextSpans.length > 0 && !textInputTarget && event.key === 'Tab') {
+        event.preventDefault()
+        void moveTextTargetSelection(event.shiftKey ? -1 : 1, false)
+        return
+      }
+
       if (!modifier && textTargetMode && currentPageTextSpans.length > 0 && !textInputTarget && event.key === 'ArrowLeft') {
         event.preventDefault()
         void moveTextTargetSelection(-1, event.shiftKey)
@@ -2696,6 +2744,99 @@
     await applySelectedTextRange(anchorIndex, nextIndex, { focusEditor: false })
   }
 
+  async function jumpTextTargetSelection(destination: 'start' | 'end', extendSelection: boolean) {
+    if (currentPageTextSpans.length === 0) {
+      return
+    }
+
+    const targetIndex = destination === 'start' ? 0 : currentPageTextSpans.length - 1
+    if (selectedTextSpanIds.length === 0 || !selectedTextSpan || !extendSelection) {
+      await applySelectedTextRange(targetIndex, targetIndex, { focusEditor: false })
+      return
+    }
+
+    const anchorId = selectedTextAnchorId ?? selectedTextSpanIds[0]
+    const anchorIndex = currentPageTextSpans.findIndex((span) => span.id === anchorId)
+    if (anchorIndex < 0) {
+      await applySelectedTextRange(targetIndex, targetIndex, { focusEditor: false })
+      return
+    }
+
+    await applySelectedTextRange(anchorIndex, targetIndex, { focusEditor: false })
+  }
+
+  async function selectAllTextTargets() {
+    if (currentPageTextSpans.length === 0) {
+      return
+    }
+
+    await applySelectedTextRange(0, currentPageTextSpans.length - 1, { focusEditor: false })
+  }
+
+  async function selectCurrentTextLine() {
+    if (!selectedTextSpan || currentPageTextSpans.length === 0) {
+      return
+    }
+
+    const lineThreshold = Math.max(0.9, selectedTextSpan.heightPercent * 0.55)
+    const lineSpans = currentPageTextSpans.filter(
+      (span) => Math.abs(span.yPercent - selectedTextSpan.yPercent) <= lineThreshold,
+    )
+
+    if (lineSpans.length === 0) {
+      return
+    }
+
+    const firstIndex = currentPageTextSpans.findIndex((span) => span.id === lineSpans[0].id)
+    const lastIndex = currentPageTextSpans.findIndex((span) => span.id === lineSpans.at(-1)?.id)
+
+    if (firstIndex < 0 || lastIndex < 0) {
+      return
+    }
+
+    await applySelectedTextRange(firstIndex, lastIndex, { focusEditor: false })
+  }
+
+  function nudgeSelectedTextRegion(deltaXPercent: number, deltaYPercent: number) {
+    const selectedRegion = resolveSelectedTextTargetRegionPreview()
+    if (!selectedRegion) {
+      return
+    }
+
+    applyTextEditRegion({
+      ...selectedRegion,
+      xPercent: selectedRegion.xPercent + deltaXPercent,
+      yPercent: selectedRegion.yPercent + deltaYPercent,
+    })
+  }
+
+  function resizeSelectedTextRegion(deltaWidthPercent: number, deltaHeightPercent: number) {
+    const selectedRegion = resolveSelectedTextTargetRegionPreview()
+    if (!selectedRegion) {
+      return
+    }
+
+    applyTextEditRegion({
+      ...selectedRegion,
+      widthPercent: selectedRegion.widthPercent + deltaWidthPercent,
+      heightPercent: selectedRegion.heightPercent + deltaHeightPercent,
+    })
+  }
+
+  function resetSelectedTextRegion() {
+    if (!selectedTextSpan) {
+      return
+    }
+
+    applyTextEditRegion({
+      xPercent: selectedTextSpan.xPercent,
+      yPercent: selectedTextSpan.yPercent,
+      widthPercent: Math.max(selectedTextSpan.widthPercent, 5),
+      heightPercent: Math.max(selectedTextSpan.heightPercent, 5),
+      fontSize: selectedTextSpan.fontSize,
+    })
+  }
+
   function selectAnnotation(annotation: PdfPageAnnotationOverlay) {
     selectedAnnotationId = annotation.id
     reviewNoteTitle = annotation.title?.trim() || 'Review Note'
@@ -3467,6 +3608,29 @@
           </div>
           <div class="tool-grid compact-tool-grid">
             <button
+              data-testid="select-line-targets-button"
+              on:click={selectCurrentTextLine}
+              disabled={busy || !workspace || !selectedTextSpan}
+            >
+              Select Line
+            </button>
+            <button
+              data-testid="select-all-targets-button"
+              on:click={selectAllTextTargets}
+              disabled={busy || !workspace || currentPageTextSpans.length === 0}
+            >
+              Select All
+            </button>
+            <button
+              data-testid="reset-text-target-region-button"
+              on:click={resetSelectedTextRegion}
+              disabled={busy || !workspace || !selectedTextSpan}
+            >
+              Reset Bounds
+            </button>
+          </div>
+          <div class="tool-grid compact-tool-grid">
+            <button
               data-testid="highlight-selected-text-button"
               on:click={() => addSelectedTextMarkup('highlight')}
               disabled={busy || !workspace || !selectedTextSpan}
@@ -3488,7 +3652,9 @@
               Strike Out Text
             </button>
           </div>
-          <span class="muted">Shift-click or use Shift+Arrow Left/Right to grow the selection like an inline text range.</span>
+          <span class="muted">
+            Shift-click, Shift+Arrow, Home/End, Tab, Cmd/Ctrl+A, and Alt+Arrow shortcuts are available in direct edit mode.
+          </span>
           {#if selectedTextSpan}
             <div class="stack-list attachment-entry">
               <span>Selected: {selectedTextSpan.text}</span>
@@ -3499,6 +3665,7 @@
                 Region: {selectedTextSpan.xPercent.toFixed(1)}%, {selectedTextSpan.yPercent.toFixed(1)}%,
                 {selectedTextSpan.widthPercent.toFixed(1)}% x {selectedTextSpan.heightPercent.toFixed(1)}%
               </span>
+              <span class="muted">Alt+Arrow nudges the region. Alt+Shift+Arrow resizes it.</span>
               <button class="ghost-button" on:click={clearSelectedTextTarget} disabled={busy}>Clear Selected Text</button>
             </div>
           {:else}

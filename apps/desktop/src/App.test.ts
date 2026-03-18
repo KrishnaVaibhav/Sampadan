@@ -1013,6 +1013,115 @@ describe('Sampadan desktop app regression suite', () => {
     expect((screen.getByLabelText('Quick Replace Text') as HTMLTextAreaElement).value).toBe('Page')
   })
 
+  test('supports Home, End, Tab, and select-all controls for direct text targets', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect((screen.getByTestId('toggle-text-target-button') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    await user.click(screen.getByTestId('toggle-text-target-button'))
+    await waitFor(() => {
+      expect(screen.getByLabelText('Target text: Page')).toBeTruthy()
+    })
+
+    await user.click(screen.getByLabelText('Target text: Page'))
+    await fireEvent.keyDown(window, { key: 'Tab' })
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: 1')).toBeTruthy()
+    })
+
+    await fireEvent.keyDown(window, { key: 'Tab', shiftKey: true })
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: Page')).toBeTruthy()
+    })
+
+    await fireEvent.keyDown(window, { key: 'End' })
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: line')).toBeTruthy()
+    })
+
+    await fireEvent.keyDown(window, { key: 'Home', shiftKey: true })
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: Page 1 line')).toBeTruthy()
+      expect(screen.getByText('3 contiguous targets selected')).toBeTruthy()
+    })
+
+    await fireEvent.keyDown(window, { key: 'a', ctrlKey: true })
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: Page 1 line')).toBeTruthy()
+      expect(screen.getByText('3 contiguous targets selected')).toBeTruthy()
+    })
+
+    await user.click(screen.getByTestId('select-line-targets-button'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: Page 1 line')).toBeTruthy()
+    })
+  })
+
+  test('nudges, resizes, and resets the selected text region', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect((screen.getByTestId('toggle-text-target-button') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    await user.click(screen.getByTestId('toggle-text-target-button'))
+    await waitFor(() => {
+      expect(screen.getByLabelText('Target text: Page')).toBeTruthy()
+    })
+
+    await user.click(screen.getByLabelText('Target text: Page'))
+
+    const xInput = screen.getByLabelText('X %') as HTMLInputElement
+    const yInput = screen.getByLabelText('Y %') as HTMLInputElement
+    const widthInput = screen.getByLabelText('Width %') as HTMLInputElement
+    const heightInput = screen.getByLabelText('Height %') as HTMLInputElement
+
+    expect(Number.parseFloat(xInput.value)).toBeCloseTo(12, 2)
+    expect(Number.parseFloat(yInput.value)).toBeCloseTo(14, 2)
+    expect(Number.parseFloat(widthInput.value)).toBeCloseTo(8, 2)
+    expect(Number.parseFloat(heightInput.value)).toBeCloseTo(5, 2)
+
+    await fireEvent.keyDown(window, { key: 'ArrowRight', altKey: true })
+    await fireEvent.keyDown(window, { key: 'ArrowDown', altKey: true })
+    await fireEvent.keyDown(window, { key: 'ArrowRight', altKey: true, shiftKey: true })
+    await fireEvent.keyDown(window, { key: 'ArrowDown', altKey: true, shiftKey: true })
+
+    expect(Number.parseFloat(xInput.value)).toBeGreaterThan(12)
+    expect(Number.parseFloat(yInput.value)).toBeGreaterThan(14)
+    expect(Number.parseFloat(widthInput.value)).toBeGreaterThan(8)
+    expect(Number.parseFloat(heightInput.value)).toBeGreaterThan(5)
+
+    await user.click(screen.getByTestId('reset-text-target-region-button'))
+
+    expect(Number.parseFloat(xInput.value)).toBeCloseTo(12, 2)
+    expect(Number.parseFloat(yInput.value)).toBeCloseTo(14, 2)
+    expect(Number.parseFloat(widthInput.value)).toBeCloseTo(8, 2)
+    expect(Number.parseFloat(heightInput.value)).toBeCloseTo(5, 2)
+
+    await user.click(screen.getByTestId('select-all-targets-button'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: Page 1 line')).toBeTruthy()
+      expect(screen.getByText('3 contiguous targets selected')).toBeTruthy()
+    })
+  })
+
   test('adds true PDF annotations from the selected text flow', async () => {
     openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
 
