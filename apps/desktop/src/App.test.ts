@@ -966,6 +966,73 @@ describe('Sampadan desktop app regression suite', () => {
     expect(Number.parseFloat((screen.getByLabelText('Width %') as HTMLInputElement).value)).toBeCloseTo(24, 1)
   })
 
+  test('retargets the direct text selection by dragging the viewer range grips', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect((screen.getByTestId('toggle-text-target-button') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    const viewerSurface = screen.getByTestId('viewer-surface') as HTMLDivElement
+    vi.spyOn(viewerSurface, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 800,
+      bottom: 1000,
+      width: 800,
+      height: 1000,
+      toJSON: () => ({}),
+    } as DOMRect)
+
+    await user.click(screen.getByTestId('toggle-text-target-button'))
+    await waitFor(() => {
+      expect(screen.getByLabelText('Target text: Page')).toBeTruthy()
+    })
+
+    await user.click(screen.getByLabelText('Target text: Page'))
+    await waitFor(() => {
+      expect(screen.getByTestId('text-target-grip-end')).toBeTruthy()
+    })
+
+    await fireEvent.pointerDown(screen.getByTestId('text-target-grip-end'), {
+      clientX: 160,
+      clientY: 180,
+    })
+    await fireEvent.pointerMove(window, {
+      clientX: 290,
+      clientY: 160,
+    })
+    await fireEvent.pointerUp(window)
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: Page 1 line')).toBeTruthy()
+      expect(screen.getByText('3 contiguous targets selected')).toBeTruthy()
+    })
+
+    await fireEvent.pointerDown(screen.getByTestId('text-target-grip-start'), {
+      clientX: 96,
+      clientY: 180,
+    })
+    await fireEvent.pointerMove(window, {
+      clientX: 178,
+      clientY: 160,
+    })
+    await fireEvent.pointerUp(window)
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: 1 line')).toBeTruthy()
+      expect(screen.getByText('2 contiguous targets selected')).toBeTruthy()
+    })
+
+    expect((screen.getByLabelText('Quick Replace Text') as HTMLTextAreaElement).value).toBe('1 line')
+  })
+
   test('extends and shrinks the direct text selection with keyboard arrows', async () => {
     openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
 

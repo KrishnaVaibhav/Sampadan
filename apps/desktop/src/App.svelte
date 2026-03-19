@@ -197,6 +197,16 @@
     startRegion: TextTargetRegion
   }
 
+  type TextTargetSelectionGrip = 'start' | 'end'
+
+  type TextTargetGripDragSession = {
+    grip: TextTargetSelectionGrip
+    surfaceLeft: number
+    surfaceTop: number
+    surfaceWidth: number
+    surfaceHeight: number
+  }
+
   type SelectedTextTarget = PdfPageTextSpan & {
     spanIds: string[]
   }
@@ -233,10 +243,13 @@
   let selectedTextAnchorId: string | null = null
   let selectedTextSpans: PdfPageTextSpan[] = []
   let selectedTextSpan: SelectedTextTarget | null = null
+  let selectedTextStartSpan: PdfPageTextSpan | null = null
+  let selectedTextEndSpan: PdfPageTextSpan | null = null
   let textTargetMode = false
   let inlineTextEditorOpen = false
   let inlineTextEditor: HTMLTextAreaElement | null = null
   let textTargetDragSession: TextTargetDragSession | null = null
+  let textTargetGripDragSession: TextTargetGripDragSession | null = null
   let rangeExpression = '1'
   let metadataDraft = emptyMetadata()
   let metadataDirty = false
@@ -284,6 +297,8 @@
   $: selectedAnnotation = currentPageAnnotations.find((annotation) => annotation.id === selectedAnnotationId) ?? null
   $: selectedTextSpans = currentPageTextSpans.filter((span) => selectedTextSpanIds.includes(span.id))
   $: selectedTextSpan = buildSelectedTextTarget(selectedTextSpans)
+  $: selectedTextStartSpan = selectedTextSpans[0] ?? null
+  $: selectedTextEndSpan = selectedTextSpans.at(-1) ?? null
   $: if (selectedTextAnchorId && !currentPageTextSpans.some((span) => span.id === selectedTextAnchorId)) {
     selectedTextAnchorId = null
   }
@@ -418,6 +433,12 @@
     }
 
     const handlePointerMove = (event: PointerEvent) => {
+      if (textTargetGripDragSession) {
+        event.preventDefault()
+        void updateDraggedTextTargetGrip(event.clientX, event.clientY)
+        return
+      }
+
       if (!textTargetDragSession) return
 
       event.preventDefault()
@@ -425,8 +446,9 @@
     }
 
     const handlePointerUp = () => {
-      if (!textTargetDragSession) return
+      if (!textTargetDragSession && !textTargetGripDragSession) return
       textTargetDragSession = null
+      textTargetGripDragSession = null
     }
 
     window.addEventListener('keydown', handleKeyDown)
@@ -2393,6 +2415,58 @@
     }
   }
 
+  function resolveSelectedTextRangeIndices() {
+    if (!selectedTextStartSpan || !selectedTextEndSpan) {
+      return null
+    }
+
+    const startIndex = currentPageTextSpans.findIndex((span) => span.id === selectedTextStartSpan?.id)
+    const endIndex = currentPageTextSpans.findIndex((span) => span.id === selectedTextEndSpan?.id)
+    if (startIndex < 0 || endIndex < 0) {
+      return null
+    }
+
+    return {
+      startIndex,
+      endIndex,
+    }
+  }
+
+  function measureDistanceToTextSpan(span: PdfPageTextSpan, xPercent: number, yPercent: number) {
+    const left = span.xPercent
+    const top = span.yPercent
+    const right = span.xPercent + span.widthPercent
+    const bottom = span.yPercent + span.heightPercent
+
+    const deltaX = xPercent < left ? left - xPercent : xPercent > right ? xPercent - right : 0
+    const deltaY = yPercent < top ? top - yPercent : yPercent > bottom ? yPercent - bottom : 0
+    const outsideDistance = Math.hypot(deltaX, deltaY)
+    const centerX = left + span.widthPercent / 2
+    const centerY = top + span.heightPercent / 2
+    const centerDistance = Math.hypot(xPercent - centerX, (yPercent - centerY) * 1.1)
+
+    return outsideDistance === 0 ? centerDistance * 0.05 : outsideDistance + centerDistance * 0.05
+  }
+
+  function findNearestTextTargetIndexAtSurfacePoint(xPercent: number, yPercent: number) {
+    if (currentPageTextSpans.length === 0) {
+      return -1
+    }
+
+    let closestIndex = 0
+    let closestDistance = Number.POSITIVE_INFINITY
+
+    currentPageTextSpans.forEach((span, index) => {
+      const distance = measureDistanceToTextSpan(span, xPercent, yPercent)
+      if (distance < closestDistance) {
+        closestDistance = distance
+        closestIndex = index
+      }
+    })
+
+    return closestIndex
+  }
+
   function snapCoordinateToTextTargets(value: number, candidates: number[], threshold: number) {
     let snappedValue = value
     let closestDistance = threshold + Number.EPSILON
@@ -2655,6 +2729,7 @@
     selectedTextAnchorId = null
     inlineTextEditorOpen = false
     textTargetDragSession = null
+    textTargetGripDragSession = null
   }
 
   async function applySelectedTextRange(anchorIndex: number, extentIndex: number, options: { focusEditor?: boolean } = {}) {
@@ -2911,6 +2986,21 @@
     )
   }
 
+  function resolveTextTargetSelectionGripPosition(grip: TextTargetSelectionGrip) {
+    const gripSpan = grip === 'start' ? selectedTextStartSpan : selectedTextEndSpan
+    if (!gripSpan) {
+      return null
+    }
+
+    const xPercent = grip === 'start' ? gripSpan.xPercent : gripSpan.xPercent + gripSpan.widthPercent
+    const yPercent = gripSpan.yPercent + gripSpan.heightPercent
+
+    return {
+      xPercent: clamp(xPercent, 0, 100),
+      yPercent: clamp(yPercent, 0, 100),
+    }
+  }
+
   function resolveInlineTextEditorPosition() {
     const selectedRegion = resolveSelectedTextTargetRegionPreview()
     if (!selectedRegion) {
@@ -2955,6 +3045,64 @@
       surfaceHeight: surfaceBounds.height,
       startRegion,
     }
+  }
+
+  function startTextTargetSelectionGripDrag(grip: TextTargetSelectionGrip, event: PointerEvent) {
+    if (busy || !selectedTextSpan || !viewerSurface) {
+      return
+    }
+
+    const surfaceBounds = viewerSurface.getBoundingClientRect()
+    if (surfaceBounds.width <= 0 || surfaceBounds.height <= 0) {
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+
+    textTargetGripDragSession = {
+      grip,
+      surfaceLeft: surfaceBounds.left,
+      surfaceTop: surfaceBounds.top,
+      surfaceWidth: surfaceBounds.width,
+      surfaceHeight: surfaceBounds.height,
+    }
+  }
+
+  async function updateDraggedTextTargetGrip(clientX: number, clientY: number) {
+    if (!textTargetGripDragSession) {
+      return
+    }
+
+    const selectionRange = resolveSelectedTextRangeIndices()
+    if (!selectionRange) {
+      return
+    }
+
+    const { grip, surfaceLeft, surfaceTop, surfaceWidth, surfaceHeight } = textTargetGripDragSession
+    const xPercent = clamp(((clientX - surfaceLeft) / surfaceWidth) * 100, 0, 100)
+    const yPercent = clamp(((clientY - surfaceTop) / surfaceHeight) * 100, 0, 100)
+    const nearestIndex = findNearestTextTargetIndexAtSurfacePoint(xPercent, yPercent)
+    if (nearestIndex < 0) {
+      return
+    }
+
+    if (grip === 'start') {
+      const nextStartIndex = Math.min(nearestIndex, selectionRange.endIndex)
+      if (nextStartIndex === selectionRange.startIndex) {
+        return
+      }
+
+      await applySelectedTextRange(selectionRange.endIndex, nextStartIndex, { focusEditor: false })
+      return
+    }
+
+    const nextEndIndex = Math.max(nearestIndex, selectionRange.startIndex)
+    if (nextEndIndex === selectionRange.endIndex) {
+      return
+    }
+
+    await applySelectedTextRange(selectionRange.startIndex, nextEndIndex, { focusEditor: false })
   }
 
   function updateDraggedTextTargetRegion(clientX: number, clientY: number) {
@@ -3950,8 +4098,34 @@
               {/if}
               {#if textTargetMode && selectedTextSpan}
                 {@const selectedRegion = resolveSelectedTextTargetRegionPreview()}
+                {@const startGripPosition = resolveTextTargetSelectionGripPosition('start')}
+                {@const endGripPosition = resolveTextTargetSelectionGripPosition('end')}
                 {#if selectedRegion}
                   <div class="text-target-selection-layer">
+                    {#if startGripPosition}
+                      <button
+                        type="button"
+                        class="text-target-range-grip text-target-range-grip-start"
+                        data-testid="text-target-grip-start"
+                        aria-label="Adjust selected text start"
+                        style:left={`${startGripPosition.xPercent}%`}
+                        style:top={`${startGripPosition.yPercent}%`}
+                        on:pointerdown|stopPropagation={(event) => startTextTargetSelectionGripDrag('start', event)}
+                        disabled={busy}
+                      ></button>
+                    {/if}
+                    {#if endGripPosition}
+                      <button
+                        type="button"
+                        class="text-target-range-grip text-target-range-grip-end"
+                        data-testid="text-target-grip-end"
+                        aria-label="Adjust selected text end"
+                        style:left={`${endGripPosition.xPercent}%`}
+                        style:top={`${endGripPosition.yPercent}%`}
+                        on:pointerdown|stopPropagation={(event) => startTextTargetSelectionGripDrag('end', event)}
+                        disabled={busy}
+                      ></button>
+                    {/if}
                     <div
                       class="text-target-selection-frame"
                       data-testid="text-target-region-frame"

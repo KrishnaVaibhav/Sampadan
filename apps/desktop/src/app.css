@@ -741,6 +741,52 @@ button:disabled {
   touch-action: none;
 }
 
+.text-target-range-grip {
+  position: absolute;
+  width: 1rem;
+  height: 1.3rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  pointer-events: auto;
+  touch-action: none;
+  transform: translate(-50%, -0.1rem);
+}
+
+.text-target-range-grip::before,
+.text-target-range-grip::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.text-target-range-grip::before {
+  top: 0.04rem;
+  width: 0.68rem;
+  height: 0.68rem;
+  border-radius: 999px;
+  border: 1px solid rgba(7, 11, 16, 0.7);
+  background: rgba(99, 178, 255, 0.98);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28);
+}
+
+.text-target-range-grip::after {
+  top: 0.6rem;
+  width: 0.18rem;
+  height: 0.68rem;
+  border-radius: 999px;
+  background: rgba(99, 178, 255, 0.98);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.text-target-range-grip:hover:not(:disabled)::before,
+.text-target-range-grip:focus-visible::before,
+.text-target-range-grip:hover:not(:disabled)::after,
+.text-target-range-grip:focus-visible::after {
+  background: rgba(233, 244, 255, 0.98);
+}
+
 .text-target-handle {
   --handle-translate: translate(-50%, -50%);
   position: absolute;
