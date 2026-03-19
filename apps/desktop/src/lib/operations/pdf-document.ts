@@ -1,5 +1,5 @@
 import { getPdfLib } from '../pdf-engine'
-import type { PdfMetadataDraft } from '../types'
+import type { PdfMetadataDraft, PdfPageTextSpan } from '../types'
 
 export type WatermarkPosition = 'center' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
 export type ReviewNoteTone = 'amber' | 'blue' | 'green' | 'rose'
@@ -1418,6 +1418,8 @@ export async function replaceRegionWithTextInDocument(
     compactLayout?: boolean
     fontFamily?: string | null
     baselinePercent?: number | null
+    whiteoutTargets?: PdfPageTextSpan[]
+    forceMinimumDimensions?: boolean
   },
 ) {
   const { StandardFonts, rgb } = await getPdfLib()
@@ -1448,25 +1450,44 @@ export async function replaceRegionWithTextInDocument(
           horizontal: Math.min(4, rect.width * 0.03),
           vertical: Math.min(2, rect.height * 0.03),
         }
-    const whiteoutBleed = compactLayout
-      ? clampNumber(Math.min(baseFontSize * 0.12, Math.min(rect.width, rect.height) * 0.03), 0.4, 1.2)
-      : 0
+    const enforceMinimums = false
+    const whiteoutTargets =
+      options.whiteoutTargets?.length && options.whiteoutTargets.some((target) => target.widthPercent > 0 && target.heightPercent > 0)
+        ? options.whiteoutTargets
+        : [
+            {
+              xPercent: options.xPercent,
+              yPercent: options.yPercent,
+              widthPercent: options.widthPercent,
+              heightPercent: options.heightPercent,
+              fontSize: options.fontSize,
+              fontFamily: options.fontFamily ?? null,
+              baselinePercent: options.baselinePercent ?? null,
+            },
+          ]
 
-    page.drawRectangle({
-      x: Math.max(0, rect.x - whiteoutBleed),
-      y: Math.max(0, rect.y - whiteoutBleed / 2),
-      width: Math.min(width - Math.max(0, rect.x - whiteoutBleed), rect.width + whiteoutBleed * 2),
-      height: Math.min(height - Math.max(0, rect.y - whiteoutBleed / 2), rect.height + whiteoutBleed),
-      color: rgb(1, 1, 1),
-      opacity: 1,
-      ...(compactLayout
-        ? {}
-        : {
-            borderColor: rgb(0.86, 0.88, 0.91),
-            borderWidth: 0.6,
-            borderOpacity: 0.85,
-          }),
-    })
+    for (const target of whiteoutTargets) {
+      const targetRect = resolveRelativeEditRect(
+        {
+          pageWidth: width,
+          pageHeight: height,
+          xPercent: target.xPercent,
+          yPercent: target.yPercent,
+          widthPercent: target.widthPercent,
+          heightPercent: target.heightPercent,
+        },
+        enforceMinimums,
+      )
+
+      page.drawRectangle({
+        x: targetRect.x,
+        y: targetRect.y,
+        width: Math.min(width - targetRect.x, targetRect.width),
+        height: Math.min(height - targetRect.y, targetRect.height),
+        color: rgb(1, 1, 1),
+        opacity: 1,
+      })
+    }
 
     if (!text) {
       continue
