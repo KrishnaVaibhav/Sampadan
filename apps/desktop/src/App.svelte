@@ -207,6 +207,10 @@
     surfaceHeight: number
   }
 
+  type TextTargetSweepSession = {
+    pointerId: number
+  }
+
   type SelectedTextTarget = PdfPageTextSpan & {
     spanIds: string[]
   }
@@ -250,6 +254,7 @@
   let inlineTextEditor: HTMLTextAreaElement | null = null
   let textTargetDragSession: TextTargetDragSession | null = null
   let textTargetGripDragSession: TextTargetGripDragSession | null = null
+  let textTargetSweepSession: TextTargetSweepSession | null = null
   let rangeExpression = '1'
   let metadataDraft = emptyMetadata()
   let metadataDirty = false
@@ -351,6 +356,18 @@
         return
       }
 
+      if (textTargetMode && selectedTextSpan && !textInputTarget && event.altKey && event.key === 'Backspace') {
+        event.preventDefault()
+        resetSelectedTextEditContent()
+        return
+      }
+
+      if (textTargetMode && selectedTextSpan && !textInputTarget && modifier && event.key.toLowerCase() === 'l') {
+        event.preventDefault()
+        void selectCurrentTextLine()
+        return
+      }
+
       if (textTargetMode && currentPageTextSpans.length > 0 && !textInputTarget && modifier && event.key.toLowerCase() === 'a') {
         event.preventDefault()
         void selectAllTextTargets()
@@ -396,6 +413,30 @@
       if (!modifier && textTargetMode && currentPageTextSpans.length > 0 && !textInputTarget && event.key === 'Tab') {
         event.preventDefault()
         void moveTextTargetSelection(event.shiftKey ? -1 : 1, false)
+        return
+      }
+
+      if (!modifier && textTargetMode && currentPageTextSpans.length > 0 && !textInputTarget && event.key === 'ArrowUp') {
+        event.preventDefault()
+        void selectAdjacentTextLine(-1, event.shiftKey)
+        return
+      }
+
+      if (!modifier && textTargetMode && currentPageTextSpans.length > 0 && !textInputTarget && event.key === 'ArrowDown') {
+        event.preventDefault()
+        void selectAdjacentTextLine(1, event.shiftKey)
+        return
+      }
+
+      if (modifier && textTargetMode && currentPageTextSpans.length > 0 && !textInputTarget && event.key === 'ArrowLeft') {
+        event.preventDefault()
+        void jumpToTextLineBoundary('start', event.shiftKey)
+        return
+      }
+
+      if (modifier && textTargetMode && currentPageTextSpans.length > 0 && !textInputTarget && event.key === 'ArrowRight') {
+        event.preventDefault()
+        void jumpToTextLineBoundary('end', event.shiftKey)
         return
       }
 
@@ -446,9 +487,10 @@
     }
 
     const handlePointerUp = () => {
-      if (!textTargetDragSession && !textTargetGripDragSession) return
+      if (!textTargetDragSession && !textTargetGripDragSession && !textTargetSweepSession) return
       textTargetDragSession = null
       textTargetGripDragSession = null
+      textTargetSweepSession = null
     }
 
     window.addEventListener('keydown', handleKeyDown)
@@ -2415,6 +2457,31 @@
     }
   }
 
+  function areTextTargetsOnSameLine(reference: PdfPageTextSpan, candidate: PdfPageTextSpan) {
+    const lineThreshold = Math.max(0.9, Math.min(reference.heightPercent, candidate.heightPercent) * 0.65)
+    return Math.abs(reference.yPercent - candidate.yPercent) <= lineThreshold
+  }
+
+  function resolveTextLineBounds(index: number) {
+    if (index < 0 || index >= currentPageTextSpans.length) {
+      return null
+    }
+
+    const reference = currentPageTextSpans[index]
+    let start = index
+    let end = index
+
+    while (start > 0 && areTextTargetsOnSameLine(reference, currentPageTextSpans[start - 1])) {
+      start -= 1
+    }
+
+    while (end < currentPageTextSpans.length - 1 && areTextTargetsOnSameLine(reference, currentPageTextSpans[end + 1])) {
+      end += 1
+    }
+
+    return { start, end }
+  }
+
   function resolveSelectedTextRangeIndices() {
     if (!selectedTextStartSpan || !selectedTextEndSpan) {
       return null
@@ -2730,6 +2797,7 @@
     inlineTextEditorOpen = false
     textTargetDragSession = null
     textTargetGripDragSession = null
+    textTargetSweepSession = null
   }
 
   async function applySelectedTextRange(anchorIndex: number, extentIndex: number, options: { focusEditor?: boolean } = {}) {
@@ -2840,6 +2908,52 @@
     await applySelectedTextRange(anchorIndex, targetIndex, { focusEditor: false })
   }
 
+  async function jumpToTextLineBoundary(boundary: 'start' | 'end', extendSelection: boolean) {
+    if (currentPageTextSpans.length === 0) {
+      return
+    }
+
+    if (!selectedTextSpan) {
+      const fallbackIndex = boundary === 'start' ? 0 : currentPageTextSpans.length - 1
+      await applySelectedTextRange(fallbackIndex, fallbackIndex, { focusEditor: false })
+      return
+    }
+
+    const range = resolveSelectedTextRangeIndices()
+    if (!range) {
+      return
+    }
+
+    if (!extendSelection) {
+      const boundarySourceIndex = boundary === 'start' ? range.startIndex : range.endIndex
+      const lineBounds = resolveTextLineBounds(boundarySourceIndex)
+      if (!lineBounds) {
+        return
+      }
+
+      const targetIndex = boundary === 'start' ? lineBounds.start : lineBounds.end
+      await applySelectedTextRange(targetIndex, targetIndex, { focusEditor: false })
+      return
+    }
+
+    if (boundary === 'start') {
+      const lineBounds = resolveTextLineBounds(range.startIndex)
+      if (!lineBounds) {
+        return
+      }
+
+      await applySelectedTextRange(range.endIndex, lineBounds.start, { focusEditor: false })
+      return
+    }
+
+    const lineBounds = resolveTextLineBounds(range.endIndex)
+    if (!lineBounds) {
+      return
+    }
+
+    await applySelectedTextRange(range.startIndex, lineBounds.end, { focusEditor: false })
+  }
+
   async function selectAllTextTargets() {
     if (currentPageTextSpans.length === 0) {
       return
@@ -2849,27 +2963,83 @@
   }
 
   async function selectCurrentTextLine() {
-    if (!selectedTextSpan || currentPageTextSpans.length === 0) {
+    if (currentPageTextSpans.length === 0) {
       return
     }
 
-    const lineThreshold = Math.max(0.9, selectedTextSpan.heightPercent * 0.55)
-    const lineSpans = currentPageTextSpans.filter(
-      (span) => Math.abs(span.yPercent - selectedTextSpan.yPercent) <= lineThreshold,
-    )
-
-    if (lineSpans.length === 0) {
+    const targetIndex = selectedTextStartSpan
+      ? currentPageTextSpans.findIndex((span) => span.id === selectedTextStartSpan?.id)
+      : 0
+    const lineBounds = resolveTextLineBounds(targetIndex)
+    if (!lineBounds) {
       return
     }
 
-    const firstIndex = currentPageTextSpans.findIndex((span) => span.id === lineSpans[0].id)
-    const lastIndex = currentPageTextSpans.findIndex((span) => span.id === lineSpans.at(-1)?.id)
+    await applySelectedTextRange(lineBounds.start, lineBounds.end, { focusEditor: false })
+  }
 
-    if (firstIndex < 0 || lastIndex < 0) {
+  async function selectAdjacentTextLine(direction: -1 | 1, extendSelection: boolean) {
+    if (currentPageTextSpans.length === 0) {
       return
     }
 
-    await applySelectedTextRange(firstIndex, lastIndex, { focusEditor: false })
+    if (!selectedTextSpan) {
+      const fallbackIndex = direction > 0 ? 0 : currentPageTextSpans.length - 1
+      const lineBounds = resolveTextLineBounds(fallbackIndex)
+      if (!lineBounds) {
+        return
+      }
+
+      await applySelectedTextRange(lineBounds.start, lineBounds.end, { focusEditor: false })
+      return
+    }
+
+    const range = resolveSelectedTextRangeIndices()
+    if (!range) {
+      return
+    }
+
+    if (!extendSelection) {
+      const sourceIndex = direction < 0 ? range.startIndex : range.endIndex
+      const sourceLine = resolveTextLineBounds(sourceIndex)
+      if (!sourceLine) {
+        return
+      }
+
+      const candidateIndex = direction < 0 ? sourceLine.start - 1 : sourceLine.end + 1
+      const candidateLine = resolveTextLineBounds(candidateIndex)
+      if (!candidateLine) {
+        return
+      }
+
+      await applySelectedTextRange(candidateLine.start, candidateLine.end, { focusEditor: false })
+      return
+    }
+
+    if (direction < 0) {
+      const previousLine = resolveTextLineBounds(range.startIndex - 1)
+      if (!previousLine) {
+        return
+      }
+
+      await applySelectedTextRange(range.endIndex, previousLine.start, { focusEditor: false })
+      return
+    }
+
+    const nextLine = resolveTextLineBounds(range.endIndex + 1)
+    if (!nextLine) {
+      return
+    }
+
+    await applySelectedTextRange(range.startIndex, nextLine.end, { focusEditor: false })
+  }
+
+  function resetSelectedTextEditContent() {
+    if (!selectedTextSpan) {
+      return
+    }
+
+    textEditContent = selectedTextSpan.text
   }
 
   function nudgeSelectedTextRegion(deltaXPercent: number, deltaYPercent: number) {
@@ -2984,6 +3154,46 @@
       currentPageTextSpans.findIndex((candidate) => candidate.id === extentSpan.id),
       { focusEditor: options.focusEditor },
     )
+  }
+
+  async function handleTextTargetPointerDown(span: PdfPageTextSpan, event: PointerEvent) {
+    if (busy || event.button !== 0) {
+      return
+    }
+
+    textTargetSweepSession = {
+      pointerId: event.pointerId,
+    }
+
+    await selectTextTarget(span, {
+      extendSelection: event.shiftKey,
+      focusEditor: false,
+    })
+  }
+
+  async function handleTextTargetPointerEnter(span: PdfPageTextSpan, event: PointerEvent) {
+    if (!textTargetSweepSession || textTargetSweepSession.pointerId !== event.pointerId) {
+      return
+    }
+
+    await selectTextTarget(span, {
+      extendSelection: true,
+      focusEditor: false,
+    })
+  }
+
+  async function handleTextTargetDoubleClick(span: PdfPageTextSpan) {
+    const spanIndex = currentPageTextSpans.findIndex((candidate) => candidate.id === span.id)
+    if (spanIndex < 0) {
+      return
+    }
+
+    const lineBounds = resolveTextLineBounds(spanIndex)
+    if (!lineBounds) {
+      return
+    }
+
+    await applySelectedTextRange(lineBounds.start, lineBounds.end, { focusEditor: true })
   }
 
   function resolveTextTargetSelectionGripPosition(grip: TextTargetSelectionGrip) {
@@ -3770,11 +3980,46 @@
               Select All
             </button>
             <button
+              data-testid="select-prev-line-button"
+              on:click={() => selectAdjacentTextLine(-1, false)}
+              disabled={busy || !workspace || currentPageTextSpans.length === 0}
+            >
+              Prev Line
+            </button>
+            <button
+              data-testid="select-next-line-button"
+              on:click={() => selectAdjacentTextLine(1, false)}
+              disabled={busy || !workspace || currentPageTextSpans.length === 0}
+            >
+              Next Line
+            </button>
+            <button
               data-testid="reset-text-target-region-button"
               on:click={resetSelectedTextRegion}
               disabled={busy || !workspace || !selectedTextSpan}
             >
               Reset Bounds
+            </button>
+            <button
+              data-testid="select-line-start-button"
+              on:click={() => jumpToTextLineBoundary('start', false)}
+              disabled={busy || !workspace || !selectedTextSpan}
+            >
+              Line Start
+            </button>
+            <button
+              data-testid="select-line-end-button"
+              on:click={() => jumpToTextLineBoundary('end', false)}
+              disabled={busy || !workspace || !selectedTextSpan}
+            >
+              Line End
+            </button>
+            <button
+              data-testid="reset-text-target-text-button"
+              on:click={resetSelectedTextEditContent}
+              disabled={busy || !workspace || !selectedTextSpan}
+            >
+              Reset Replace Text
             </button>
           </div>
           <div class="tool-grid compact-tool-grid">
@@ -3801,7 +4046,8 @@
             </button>
           </div>
           <span class="muted">
-            Shift-click, Shift+Arrow, Home/End, Tab, Cmd/Ctrl+A, and Alt+Arrow shortcuts are available in direct edit mode.
+            Drag across words, double-click for a full line, use ArrowUp/Down for lines, Cmd/Ctrl+Arrow for line
+            edges, Shift to extend, Cmd/Ctrl+L for a full line, and Alt+Backspace to restore the selected text.
           </span>
           {#if selectedTextSpan}
             <div class="stack-list attachment-entry">
@@ -4089,7 +4335,10 @@
                       style:top={`${span.yPercent}%`}
                       style:width={`${span.widthPercent}%`}
                       style:height={`${Math.max(span.heightPercent, 0.8)}%`}
+                      on:pointerdown={(event) => void handleTextTargetPointerDown(span, event)}
+                      on:pointerenter={(event) => void handleTextTargetPointerEnter(span, event)}
                       on:click={(event) => void selectTextTarget(span, { extendSelection: event.shiftKey })}
+                      on:dblclick={() => void handleTextTargetDoubleClick(span)}
                       aria-label={`Target text: ${span.text}`}
                       title={`Edit text: ${span.text}`}
                     ></button>

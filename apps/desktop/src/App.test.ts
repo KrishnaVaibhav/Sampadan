@@ -49,38 +49,7 @@ vi.mock('./lib/viewer/pdf-viewer', () => ({
     { pageNumber: 2, dataUrl: 'data:image/jpeg;base64,ZmFrZQ==', width: 120, height: 160 },
     { pageNumber: 3, dataUrl: 'data:image/jpeg;base64,ZmFrZQ==', width: 120, height: 160 },
   ]),
-  extractPageTextSpans: vi.fn(async (_pdfProxy, pageNumber: number) => [
-    {
-      id: `target-${pageNumber}-page`,
-      pageNumber,
-      text: 'Page',
-      xPercent: 12,
-      yPercent: 14,
-      widthPercent: 8,
-      heightPercent: 4,
-      fontSize: 16,
-    },
-    {
-      id: `target-${pageNumber}-number`,
-      pageNumber,
-      text: String(pageNumber),
-      xPercent: 20.4,
-      yPercent: 14,
-      widthPercent: 4.2,
-      heightPercent: 4,
-      fontSize: 16,
-    },
-    {
-      id: `target-${pageNumber}-line`,
-      pageNumber,
-      text: 'line',
-      xPercent: 25.2,
-      yPercent: 14,
-      widthPercent: 10.8,
-      heightPercent: 4,
-      fontSize: 16,
-    },
-  ]),
+  extractPageTextSpans: vi.fn(),
   extractPageAnnotations: vi.fn(async (_pdfProxy, pageNumber: number) => [
     {
       id: `annotation-${pageNumber}`,
@@ -278,6 +247,78 @@ vi.mock('./lib/session/recent-files', () => ({
 
 import App from './App.svelte'
 import * as annotationOperations from './lib/operations/pdf-annotations'
+import * as viewerModule from './lib/viewer/pdf-viewer'
+
+function buildDefaultTextTargetSpans(pageNumber: number) {
+  return [
+    {
+      id: `target-${pageNumber}-page`,
+      pageNumber,
+      text: 'Page',
+      xPercent: 12,
+      yPercent: 14,
+      widthPercent: 8,
+      heightPercent: 4,
+      fontSize: 16,
+    },
+    {
+      id: `target-${pageNumber}-number`,
+      pageNumber,
+      text: String(pageNumber),
+      xPercent: 20.4,
+      yPercent: 14,
+      widthPercent: 4.2,
+      heightPercent: 4,
+      fontSize: 16,
+    },
+    {
+      id: `target-${pageNumber}-line`,
+      pageNumber,
+      text: 'line',
+      xPercent: 25.2,
+      yPercent: 14,
+      widthPercent: 10.8,
+      heightPercent: 4,
+      fontSize: 16,
+    },
+  ]
+}
+
+function buildMultilineTextTargetSpans(pageNumber: number) {
+  return [
+    ...buildDefaultTextTargetSpans(pageNumber),
+    {
+      id: `target-${pageNumber}-second`,
+      pageNumber,
+      text: 'second',
+      xPercent: 12,
+      yPercent: 22,
+      widthPercent: 11.2,
+      heightPercent: 4,
+      fontSize: 16,
+    },
+    {
+      id: `target-${pageNumber}-row`,
+      pageNumber,
+      text: 'row',
+      xPercent: 23.7,
+      yPercent: 22,
+      widthPercent: 6.4,
+      heightPercent: 4,
+      fontSize: 16,
+    },
+    {
+      id: `target-${pageNumber}-text`,
+      pageNumber,
+      text: 'text',
+      xPercent: 30.7,
+      yPercent: 22,
+      widthPercent: 7.8,
+      heightPercent: 4,
+      fontSize: 16,
+    },
+  ]
+}
 
 const sampleTrustReport: PdfTrustReport = {
   signatureCount: 1,
@@ -408,6 +449,10 @@ beforeEach(() => {
   vi.mocked(annotationOperations.addTextMarkupAnnotationToDocument).mockClear()
   vi.mocked(annotationOperations.removeAnnotationFromDocument).mockClear()
   vi.mocked(annotationOperations.updateAnnotationInDocument).mockClear()
+  vi.mocked(viewerModule.extractPageTextSpans).mockReset()
+  vi.mocked(viewerModule.extractPageTextSpans).mockImplementation(async (_pdfProxy, pageNumber: number) =>
+    buildDefaultTextTargetSpans(pageNumber),
+  )
 
   invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
     switch (command) {
@@ -1033,6 +1078,56 @@ describe('Sampadan desktop app regression suite', () => {
     expect((screen.getByLabelText('Quick Replace Text') as HTMLTextAreaElement).value).toBe('1 line')
   })
 
+  test('supports drag sweep selection and double-click line targeting in direct edit mode', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
+    vi.mocked(viewerModule.extractPageTextSpans).mockImplementation(async (_pdfProxy, pageNumber: number) =>
+      buildMultilineTextTargetSpans(pageNumber),
+    )
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect((screen.getByTestId('toggle-text-target-button') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    await user.click(screen.getByTestId('toggle-text-target-button'))
+    await waitFor(() => {
+      expect(screen.getByLabelText('Target text: Page')).toBeTruthy()
+      expect(screen.getByLabelText('Target text: second')).toBeTruthy()
+    })
+
+    await fireEvent.pointerDown(screen.getByLabelText('Target text: Page'), {
+      button: 0,
+      buttons: 1,
+      pointerId: 1,
+    })
+    await fireEvent.pointerEnter(screen.getByLabelText('Target text: 1'), {
+      buttons: 1,
+      pointerId: 1,
+    })
+    await fireEvent.pointerEnter(screen.getByLabelText('Target text: line'), {
+      buttons: 1,
+      pointerId: 1,
+    })
+    await fireEvent.pointerUp(window, { pointerId: 1 })
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: Page 1 line')).toBeTruthy()
+      expect(screen.getByText('3 contiguous targets selected')).toBeTruthy()
+    })
+
+    await fireEvent.dblClick(screen.getByLabelText('Target text: second'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: second row text')).toBeTruthy()
+      expect(screen.getByText('3 contiguous targets selected')).toBeTruthy()
+    })
+
+    expect((screen.getByLabelText('Quick Replace Text') as HTMLTextAreaElement).value).toBe('second row text')
+  })
+
   test('extends and shrinks the direct text selection with keyboard arrows', async () => {
     openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
 
@@ -1078,6 +1173,61 @@ describe('Sampadan desktop app regression suite', () => {
     })
 
     expect((screen.getByLabelText('Quick Replace Text') as HTMLTextAreaElement).value).toBe('Page')
+  })
+
+  test('supports line navigation, line edges, and line extension shortcuts in direct edit mode', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
+    vi.mocked(viewerModule.extractPageTextSpans).mockImplementation(async (_pdfProxy, pageNumber: number) =>
+      buildMultilineTextTargetSpans(pageNumber),
+    )
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect((screen.getByTestId('toggle-text-target-button') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    await user.click(screen.getByTestId('toggle-text-target-button'))
+    await waitFor(() => {
+      expect(screen.getByLabelText('Target text: row')).toBeTruthy()
+    })
+
+    await user.click(screen.getByLabelText('Target text: Page'))
+    await fireEvent.keyDown(window, { key: 'ArrowDown' })
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: second row text')).toBeTruthy()
+      expect(screen.getByText('3 contiguous targets selected')).toBeTruthy()
+    })
+
+    await user.click(screen.getByLabelText('Target text: row'))
+    await fireEvent.keyDown(window, { key: 'l', ctrlKey: true })
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: second row text')).toBeTruthy()
+    })
+
+    await fireEvent.keyDown(window, { key: 'ArrowLeft', ctrlKey: true })
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: second')).toBeTruthy()
+    })
+
+    await fireEvent.keyDown(window, { key: 'ArrowRight', ctrlKey: true, shiftKey: true })
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: second row text')).toBeTruthy()
+      expect(screen.getByText('3 contiguous targets selected')).toBeTruthy()
+    })
+
+    await fireEvent.keyDown(window, { key: 'ArrowUp', shiftKey: true })
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: Page 1 line second row text')).toBeTruthy()
+      expect(screen.getByText('6 contiguous targets selected')).toBeTruthy()
+    })
   })
 
   test('supports Home, End, Tab, and select-all controls for direct text targets', async () => {
@@ -1134,6 +1284,71 @@ describe('Sampadan desktop app regression suite', () => {
     await waitFor(() => {
       expect(screen.getByText('Selected: Page 1 line')).toBeTruthy()
     })
+  })
+
+  test('supports line-aware direct text toolbar controls and reset replace text', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
+    vi.mocked(viewerModule.extractPageTextSpans).mockImplementation(async (_pdfProxy, pageNumber: number) =>
+      buildMultilineTextTargetSpans(pageNumber),
+    )
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect((screen.getByTestId('toggle-text-target-button') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    await user.click(screen.getByTestId('toggle-text-target-button'))
+    await waitFor(() => {
+      expect(screen.getByLabelText('Target text: row')).toBeTruthy()
+    })
+
+    await user.click(screen.getByLabelText('Target text: row'))
+    await user.click(screen.getByTestId('select-line-targets-button'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: second row text')).toBeTruthy()
+      expect(screen.getByText('3 contiguous targets selected')).toBeTruthy()
+    })
+
+    await user.click(screen.getByTestId('select-line-start-button'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: second')).toBeTruthy()
+    })
+
+    await user.click(screen.getByTestId('select-line-end-button'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: text')).toBeTruthy()
+    })
+
+    await user.click(screen.getByTestId('select-prev-line-button'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: Page 1 line')).toBeTruthy()
+    })
+
+    await user.click(screen.getByTestId('select-next-line-button'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: second row text')).toBeTruthy()
+    })
+
+    const quickReplace = screen.getByLabelText('Quick Replace Text') as HTMLTextAreaElement
+    await user.clear(quickReplace)
+    await user.type(quickReplace, 'temporary edit')
+    expect(quickReplace.value).toBe('temporary edit')
+
+    await user.click(screen.getByTestId('reset-text-target-text-button'))
+    expect(quickReplace.value).toBe('second row text')
+
+    await user.clear(quickReplace)
+    await user.type(quickReplace, 'changed again')
+    await fireEvent.keyDown(window, { key: 'Backspace', altKey: true })
+    expect(quickReplace.value).toBe('second row text')
   })
 
   test('nudges, resizes, and resets the selected text region', async () => {
