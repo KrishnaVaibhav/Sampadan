@@ -78,4 +78,31 @@ describe('buildPdfPageTextTargets', () => {
     const gap = targets[1].xPercent - (targets[0].xPercent + targets[0].widthPercent)
     expect(gap).toBeLessThan(18)
   })
+
+  test('carries font and baseline hints into split word targets', () => {
+    const targets = buildPdfPageTextTargets(
+      [
+        {
+          id: 'span-4',
+          text: 'Times sample',
+          left: 48,
+          top: 88,
+          right: 168,
+          bottom: 106,
+          fontSize: 15,
+          fontFamily: 'Times New Roman',
+          baselinePercent: 42.5,
+        },
+      ],
+      1,
+      600,
+      800,
+    )
+
+    expect(targets.map((target) => target.text)).toEqual(['Times', 'sample'])
+    expect(targets[0].fontFamily).toBe('Times New Roman')
+    expect(targets[0].baselinePercent).toBeCloseTo(42.5, 3)
+    expect(targets[1].fontFamily).toBe('Times New Roman')
+    expect(targets[1].baselinePercent).toBeCloseTo(42.5, 3)
+  })
 })

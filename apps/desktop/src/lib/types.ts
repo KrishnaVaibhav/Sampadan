@@ -182,6 +182,8 @@ export interface PdfPageTextSpan {
   widthPercent: number
   heightPercent: number
   fontSize: number
+  fontFamily?: string | null
+  baselinePercent?: number | null
 }
 
 export interface PdfDocumentTextLayoutPage {

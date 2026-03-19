@@ -66,6 +66,7 @@ type ParsedContentToken = TextOperandToken | NameToken | WordToken | NumberToken
 type LayoutFontMetrics = {
   widthOfTextAtSize: (text: string, size: number) => number
   heightAtSize?: (size: number, options?: { descender?: boolean }) => number
+  sizeAtHeight?: (height: number) => number
 }
 
 async function loadDocument(bytes: Uint8Array) {
@@ -221,6 +222,79 @@ function normalizeTextForMatch(text: string) {
 
 function resolveTextHeightAtSize(font: LayoutFontMetrics, size: number) {
   return typeof font.heightAtSize === 'function' ? font.heightAtSize(size, { descender: false }) : size
+}
+
+function resolveClosestStandardFontName(fontFamilyHint?: string | null) {
+  const normalizedHint = (fontFamilyHint ?? '').toLowerCase()
+  const wantsMonospace =
+    /courier|mono|monospace|consolas|menlo|monaco|source code|jetbrains mono/.test(normalizedHint)
+  const wantsSerif =
+    !wantsMonospace && /times|serif|georgia|cambria|garamond|palatino|bookman|baskerville/.test(normalizedHint)
+  const wantsBold = /bold|black|semibold|demibold|medium/.test(normalizedHint)
+  const wantsItalic = /italic|oblique/.test(normalizedHint)
+
+  if (wantsMonospace) {
+    if (wantsBold && wantsItalic) {
+      return 'Courier-BoldOblique'
+    }
+
+    if (wantsBold) {
+      return 'Courier-Bold'
+    }
+
+    if (wantsItalic) {
+      return 'Courier-Oblique'
+    }
+
+    return 'Courier'
+  }
+
+  if (wantsSerif) {
+    if (wantsBold && wantsItalic) {
+      return 'Times-BoldItalic'
+    }
+
+    if (wantsBold) {
+      return 'Times-Bold'
+    }
+
+    if (wantsItalic) {
+      return 'Times-Italic'
+    }
+
+    return 'Times-Roman'
+  }
+
+  if (wantsBold && wantsItalic) {
+    return 'Helvetica-BoldOblique'
+  }
+
+  if (wantsBold) {
+    return 'Helvetica-Bold'
+  }
+
+  if (wantsItalic) {
+    return 'Helvetica-Oblique'
+  }
+
+  return 'Helvetica'
+}
+
+function measureTextGlyphCount(text: string) {
+  return Array.from(text).length
+}
+
+function measureWordSpaceCount(text: string) {
+  return Array.from(text).filter((character) => character === ' ').length
+}
+
+function formatPdfNumber(value: number) {
+  const rounded = Math.abs(value) < 0.0005 ? 0 : value
+  if (Number.isInteger(rounded)) {
+    return String(rounded)
+  }
+
+  return rounded.toFixed(3).replace(/\.?0+$/, '')
 }
 
 function resolveEditPadding(
@@ -582,12 +656,85 @@ function parseAdjustedTextArrayToken(token: ArrayToken): Array<TextOperandToken 
   return segments
 }
 
+type ResolvedTextShowCandidate = {
+  token: TextOperandToken | ArrayToken
+  operatorEnd: number
+  decodedText: string
+  operatorName: string
+  segments: Array<TextOperandToken | NumberToken> | null
+  replacementRaw: (replacementHex: string) => string
+}
+
+function measureDisplayedTextAdvance(
+  text: string,
+  font: {
+    widthOfTextAtSize: (text: string, size: number) => number
+  },
+  options: {
+    fontSize: number
+    charSpacing: number
+    wordSpacing: number
+    horizontalScale: number
+  },
+) {
+  const glyphAdvance = font.widthOfTextAtSize(text, options.fontSize)
+  const spacingAdvance = measureTextGlyphCount(text) * options.charSpacing + measureWordSpaceCount(text) * options.wordSpacing
+  return (glyphAdvance + spacingAdvance) * options.horizontalScale
+}
+
+function measureCandidateAdvance(
+  candidate: ResolvedTextShowCandidate,
+  font: {
+    widthOfTextAtSize: (text: string, size: number) => number
+  },
+  options: {
+    fontSize: number
+    charSpacing: number
+    wordSpacing: number
+    horizontalScale: number
+  },
+  pdfLib: Awaited<ReturnType<typeof getPdfLib>>,
+) {
+  if (!candidate.segments) {
+    return measureDisplayedTextAdvance(candidate.decodedText, font, options)
+  }
+
+  let advance = 0
+
+  for (const segment of candidate.segments) {
+    if (segment.kind === 'number') {
+      advance -= (segment.value / 1000) * options.fontSize * options.horizontalScale
+      continue
+    }
+
+    advance += measureDisplayedTextAdvance(decodeTextOperand(segment, pdfLib), font, options)
+  }
+
+  return advance
+}
+
+function resolveTrailingTextAdjustment(
+  originalAdvance: number,
+  replacementAdvance: number,
+  options: {
+    fontSize: number
+    horizontalScale: number
+  },
+) {
+  const delta = replacementAdvance - originalAdvance
+  if (Math.abs(delta) < 0.01 || options.fontSize <= 0 || options.horizontalScale <= 0) {
+    return null
+  }
+
+  return (delta / (options.fontSize * options.horizontalScale)) * 1000
+}
+
 function resolveTextShowCandidate(
   operatorName: string,
   operatorEnd: number,
   operands: ParsedContentToken[],
   pdfLib: Awaited<ReturnType<typeof getPdfLib>>,
-) {
+): ResolvedTextShowCandidate | null {
   const operand = operands.at(-1)
 
   if (
@@ -600,6 +747,7 @@ function resolveTextShowCandidate(
       operatorEnd,
       decodedText: decodeTextOperand(operand, pdfLib),
       operatorName,
+      segments: null,
       replacementRaw: (replacementHex: string) => replacementHex,
     }
   }
@@ -618,6 +766,7 @@ function resolveTextShowCandidate(
         .map((segment) => decodeTextOperand(segment, pdfLib))
         .join(''),
       operatorName,
+      segments,
       replacementRaw: (replacementHex: string) => `[${replacementHex}]`,
     }
   }
@@ -700,10 +849,11 @@ async function attemptContentStreamTextReplacement(
     let cursor = 0
     let currentFontKey: string | null = null
     let currentFontSize = options.fontSize
+    let currentCharacterSpacing = 0
+    let currentWordSpacing = 0
+    let currentHorizontalScale = 1
     let operands: ParsedContentToken[] = []
-    let pendingSequence: Array<
-      NonNullable<ReturnType<typeof resolveTextShowCandidate>>
-    > = []
+    let pendingSequence: ResolvedTextShowCandidate[] = []
 
     const tryReplaceCandidates = (candidates: typeof pendingSequence) => {
       if (candidates.length === 0) {
@@ -732,25 +882,58 @@ async function attemptContentStreamTextReplacement(
         return null
       }
 
-      const replacementWidth = font.embedder.widthOfTextAtSize(options.replacementText, currentFontSize)
-      if (replacementWidth > availableWidth + Math.max(4, currentFontSize * 0.35)) {
+      const textState = {
+        fontSize: currentFontSize,
+        charSpacing: currentCharacterSpacing,
+        wordSpacing: currentWordSpacing,
+        horizontalScale: currentHorizontalScale,
+      }
+      const originalAdvance = candidates.reduce(
+        (total, candidate) => total + measureCandidateAdvance(candidate, font.embedder, textState, pdfLib),
+        0,
+      )
+      const replacementAdvance = measureDisplayedTextAdvance(options.replacementText, font.embedder, textState)
+      if (replacementAdvance > availableWidth + Math.max(4, currentFontSize * 0.35)) {
         return null
       }
 
+      const trailingAdjustment = resolveTrailingTextAdjustment(originalAdvance, replacementAdvance, {
+        fontSize: currentFontSize,
+        horizontalScale: currentHorizontalScale,
+      })
+      const replacementTjRaw = `[${replacementHex}${
+        trailingAdjustment === null ? '' : ` ${formatPdfNumber(trailingAdjustment)}`
+      }] TJ`
+
       if (candidates.length === 1) {
         const [candidate] = candidates
-        return `${content.slice(0, candidate.token.start)}${candidate.replacementRaw(replacementHex)}${content.slice(candidate.token.end)}`
+        if (trailingAdjustment === null || (candidate.operatorName !== 'Tj' && candidate.operatorName !== 'TJ')) {
+          return `${content.slice(0, candidate.token.start)}${candidate.replacementRaw(replacementHex)}${content.slice(candidate.token.end)}`
+        }
+
+        return `${content.slice(0, candidate.token.start)}${replacementTjRaw}${content.slice(candidate.operatorEnd)}`
       }
 
       const first = candidates[0]
       const last = candidates[candidates.length - 1]
-      return `${content.slice(0, first.token.start)}[${replacementHex}] TJ${content.slice(last.operatorEnd)}`
+      return `${content.slice(0, first.token.start)}${replacementTjRaw}${content.slice(last.operatorEnd)}`
     }
 
     const flushPendingSequence = () => {
       const result = tryReplaceCandidates(pendingSequence)
       pendingSequence = []
       return result
+    }
+
+    const tryReplacePendingSequencePrefixes = () => {
+      for (let prefixLength = pendingSequence.length; prefixLength >= 1; prefixLength -= 1) {
+        const result = tryReplaceCandidates(pendingSequence.slice(0, prefixLength))
+        if (result === null || typeof result === 'string') {
+          return result
+        }
+      }
+
+      return undefined
     }
 
     while (true) {
@@ -791,9 +974,44 @@ async function attemptContentStreamTextReplacement(
         continue
       }
 
+      if (token.raw === 'Tc') {
+        const spacingToken = operands.at(-1)
+        currentCharacterSpacing = spacingToken?.kind === 'number' ? spacingToken.value : currentCharacterSpacing
+        operands = []
+        continue
+      }
+
+      if (token.raw === 'Tw') {
+        const spacingToken = operands.at(-1)
+        currentWordSpacing = spacingToken?.kind === 'number' ? spacingToken.value : currentWordSpacing
+        operands = []
+        continue
+      }
+
+      if (token.raw === 'Tz') {
+        const scalingToken = operands.at(-1)
+        currentHorizontalScale =
+          scalingToken?.kind === 'number' ? clampNumber(scalingToken.value / 100, 0.01, 10) : currentHorizontalScale
+        operands = []
+        continue
+      }
+
+      if (token.raw === '"') {
+        const characterSpacingToken = operands.at(-2)
+        const wordSpacingToken = operands.at(-3)
+
+        currentCharacterSpacing =
+          characterSpacingToken?.kind === 'number' ? characterSpacingToken.value : currentCharacterSpacing
+        currentWordSpacing = wordSpacingToken?.kind === 'number' ? wordSpacingToken.value : currentWordSpacing
+      }
+
       const candidate = resolveTextShowCandidate(token.raw, token.end, operands, pdfLib)
       if (candidate && (candidate.operatorName === 'Tj' || candidate.operatorName === 'TJ')) {
         pendingSequence.push(candidate)
+        const prefixResult = tryReplacePendingSequencePrefixes()
+        if (prefixResult === null || typeof prefixResult === 'string') {
+          return prefixResult
+        }
         operands = []
         continue
       }
@@ -1161,11 +1379,15 @@ export async function replaceRegionWithTextInDocument(
     alignment: TextEditAlignment
     autoFit?: boolean
     compactLayout?: boolean
+    fontFamily?: string | null
+    baselinePercent?: number | null
   },
 ) {
   const { StandardFonts, rgb } = await getPdfLib()
   const document = await loadDocument(bytes)
-  const font = await document.embedFont(StandardFonts.Helvetica)
+  const font = await document.embedFont(
+    (StandardFonts as Record<string, string>)[resolveClosestStandardFontName(options.fontFamily)] ?? StandardFonts.Helvetica,
+  )
   const text = options.text.trim()
   const pageIndexes = normalizePageIndexes(options.pageIndexes, document.getPageCount())
   const baseFontSize = clampNumber(options.fontSize, 8, 72)
@@ -1182,7 +1404,13 @@ export async function replaceRegionWithTextInDocument(
       widthPercent: options.widthPercent,
       heightPercent: options.heightPercent,
     })
-    const padding = resolveEditPadding(rect, baseFontSize, compactLayout)
+    const useBaselineAnchoring = compactLayout && typeof options.baselinePercent === 'number'
+    const padding = useBaselineAnchoring
+      ? {
+          horizontal: 0,
+          vertical: 0,
+        }
+      : resolveEditPadding(rect, baseFontSize, compactLayout)
     const whiteoutBleed = compactLayout
       ? clampNumber(Math.min(baseFontSize * 0.16, Math.min(rect.width, rect.height) * 0.05), 0.6, 2.2)
       : 0
@@ -1221,13 +1449,21 @@ export async function replaceRegionWithTextInDocument(
       preferSingleLine: compactLayout,
       lineHeightMultiplier: compactLayout ? 1.1 : 1.18,
     })
-    const blockBottomY = resolveCenteredTextBlockY({
+    const fallbackBlockBottomY = resolveCenteredTextBlockY({
       rectY: contentY,
       rectHeight: contentHeight,
       lineCount: lines.length,
       lineHeight,
       textHeight,
     })
+    const baselineY =
+      useBaselineAnchoring && lines.length === 1
+        ? clampNumber(
+            height - height * ((options.baselinePercent ?? 0) / 100),
+            rect.y + textHeight * 0.72,
+            rect.y + rect.height - Math.max(0.4, whiteoutBleed),
+          )
+        : null
 
     for (const [lineIndex, line] of lines.entries()) {
       const textWidth = font.widthOfTextAtSize(line, fontSize)
@@ -1239,7 +1475,7 @@ export async function replaceRegionWithTextInDocument(
           textWidth,
           alignment: options.alignment,
         }),
-        y: blockBottomY + (lines.length - lineIndex - 1) * lineHeight,
+        y: baselineY ?? fallbackBlockBottomY + (lines.length - lineIndex - 1) * lineHeight,
         size: fontSize,
         font,
         color: rgb(0.08, 0.1, 0.12),
@@ -1263,6 +1499,8 @@ export async function replaceTargetedTextInDocument(
     heightPercent: number
     fontSize: number
     alignment: TextEditAlignment
+    fontFamily?: string | null
+    baselinePercent?: number | null
   },
 ): Promise<TargetedTextReplacementResult> {
   const replacementText = options.replacementText.trim()
@@ -1300,6 +1538,8 @@ export async function replaceTargetedTextInDocument(
       alignment: options.alignment,
       autoFit: true,
       compactLayout: true,
+      fontFamily: options.fontFamily,
+      baselinePercent: options.baselinePercent,
     }),
     strategy: 'overlay',
   }

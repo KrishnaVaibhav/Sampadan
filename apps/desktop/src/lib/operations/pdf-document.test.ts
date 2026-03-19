@@ -184,6 +184,71 @@ async function createSplitTextRunPdf() {
   return new Uint8Array(await document.save())
 }
 
+async function createTrailingTextRunPdf() {
+  const { PDFDocument, PDFName, PDFRef, PDFStream, PDFRawStream, decodePDFRawStream } = await import('pdf-lib')
+  const source = await createSamplePdf(1)
+  const document = await PDFDocument.load(source.slice(), { updateMetadata: false })
+  const page = document.getPage(0)
+  const context = page.node.context
+  const contents = page.node.normalizedEntries().Contents
+  const bodyHex = textToPdfHex('Body content for page 1')
+  const tailHex = textToPdfHex(' tail marker')
+  let rewritten = false
+
+  if (!contents) {
+    throw new Error('Expected page contents for trailing text-run PDF fixture.')
+  }
+
+  for (let index = 0; index < contents.size(); index += 1) {
+    const token = contents.get(index)
+    const stream = contents.lookupMaybe(index, PDFStream)
+    if (!stream) {
+      continue
+    }
+
+    let contentBytes: Uint8Array
+    if (stream instanceof PDFRawStream) {
+      contentBytes = decodePDFRawStream(stream).decode()
+    } else {
+      const unencoded = (stream as { getUnencodedContents?: () => Uint8Array }).getUnencodedContents
+      contentBytes = typeof unencoded === 'function' ? unencoded.call(stream) : stream.getContents()
+    }
+
+    const decoded = decodePdfContentBytes(contentBytes)
+    if (!decoded.includes(`<${bodyHex}> Tj`)) {
+      continue
+    }
+
+    const replacement = decoded.replace(`<${bodyHex}> Tj`, `<${bodyHex}> Tj\n<${tailHex}> Tj`)
+    const replacementStream = context.flateStream(replacement)
+    const filterName = PDFName.of('Filter')
+    const decodeParmsName = PDFName.of('DecodeParms')
+
+    for (const [key, value] of stream.dict.entries()) {
+      if (key === PDFName.Length || key === filterName || key === decodeParmsName) {
+        continue
+      }
+
+      replacementStream.dict.set(key, value)
+    }
+
+    if (token instanceof PDFRef) {
+      context.assign(token, replacementStream)
+    } else {
+      contents.set(index, replacementStream)
+    }
+
+    rewritten = true
+    break
+  }
+
+  if (!rewritten) {
+    throw new Error('Failed to create a trailing text-run fixture.')
+  }
+
+  return new Uint8Array(await document.save())
+}
+
 async function readPdfText(bytes: Uint8Array) {
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
   const document = await getDocument({ data: bytes.slice() }).promise
@@ -449,6 +514,54 @@ describe('real PDF document operations', () => {
     const text = await readPdfText(replaced.bytes)
     expect(text).toContain('Split run body copy')
     expect(text).not.toContain('Body content for page 1')
+  })
+
+  test('targeted born-digital text replacement preserves the following text position when widths differ', async () => {
+    const source = await createTrailingTextRunPdf()
+
+    const replaced = await replaceTargetedTextInDocument(source, {
+      targetText: 'Body content for page 1',
+      replacementText: 'Edit',
+      pageIndex: 0,
+      targetOccurrence: 0,
+      xPercent: 8,
+      yPercent: 10,
+      widthPercent: 36,
+      heightPercent: 4,
+      fontSize: 14,
+      alignment: 'left',
+    })
+
+    expect(replaced.strategy).toBe('content-stream')
+    const { PDFDocument, PDFName, PDFStream, PDFRawStream, decodePDFRawStream } = await import('pdf-lib')
+    const document = await PDFDocument.load(replaced.bytes.slice(), { updateMetadata: false })
+    const contents = document.getPage(0).node.normalizedEntries().Contents
+    const editHex = textToPdfHex('Edit')
+    const tailHex = textToPdfHex(' tail marker')
+    let rewrittenContent = ''
+
+    if (!contents) {
+      throw new Error('Expected page contents for rewritten trailing text-run fixture.')
+    }
+
+    for (let index = 0; index < contents.size(); index += 1) {
+      const stream = contents.lookupMaybe(index, PDFStream)
+      if (!stream) {
+        continue
+      }
+
+      const contentBytes =
+        stream instanceof PDFRawStream
+          ? decodePDFRawStream(stream).decode()
+          : (stream as { getUnencodedContents?: () => Uint8Array }).getUnencodedContents?.() ?? stream.getContents()
+      const decoded = decodePdfContentBytes(contentBytes)
+      if (decoded.includes(`<${tailHex}> Tj`)) {
+        rewrittenContent = decoded
+        break
+      }
+    }
+
+    expect(rewrittenContent).toMatch(new RegExp(`\\[<${editHex}>\\s+-?\\d+(?:\\.\\d+)?\\]\\s+TJ\\s*<${tailHex}>\\s+Tj`))
   })
 
   test('targeted text replacement falls back to overlay editing when the new text exceeds the original line box', async () => {

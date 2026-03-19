@@ -186,6 +186,8 @@
     widthPercent: number
     heightPercent: number
     fontSize: number
+    fontFamily?: string | null
+    baselinePercent?: number | null
   }
 
   type TextTargetDragSession = {
@@ -232,6 +234,8 @@
     widthPercent: number
     heightPercent: number
     fontSize: number
+    fontFamily?: string | null
+    baselinePercent?: number | null
   }
 
   type SelectedTextTarget = PdfPageTextSpan & {
@@ -1819,6 +1823,8 @@
         widthPercent: targetRegion.widthPercent,
         heightPercent: targetRegion.heightPercent,
         fontSize: targetRegion.fontSize,
+        fontFamily: targetRegion.fontFamily ?? selectedTextSpan.fontFamily ?? null,
+        baselinePercent: targetRegion.baselinePercent ?? selectedTextSpan.baselinePercent ?? null,
         alignment: textEditAlignment,
       })
 
@@ -1893,6 +1899,8 @@
           widthPercent: matchTarget.widthPercent,
           heightPercent: matchTarget.heightPercent,
           fontSize: matchTarget.fontSize,
+          fontFamily: matchTarget.fontFamily ?? null,
+          baselinePercent: matchTarget.baselinePercent ?? null,
           alignment: textEditAlignment,
         })
 
@@ -2574,6 +2582,9 @@
       widthPercent,
       heightPercent,
       fontSize: clamp(region.fontSize, 8, 72),
+      fontFamily: region.fontFamily ?? null,
+      baselinePercent:
+        typeof region.baselinePercent === 'number' ? clamp(region.baselinePercent, 0, 100) : null,
     } satisfies TextTargetRegion
   }
 
@@ -2627,6 +2638,12 @@
     const top = Math.min(...spans.map((span) => span.yPercent))
     const right = Math.max(...spans.map((span) => span.xPercent + span.widthPercent))
     const bottom = Math.max(...spans.map((span) => span.yPercent + span.heightPercent))
+    const sameLine = spans.every((span) => areTextTargetsOnSameLine(spans[0], span))
+    const baselines = sameLine
+      ? spans
+          .map((span) => span.baselinePercent)
+          .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+      : []
 
     return {
       id: spans.map((span) => span.id).join('::'),
@@ -2637,6 +2654,9 @@
       widthPercent: right - left,
       heightPercent: bottom - top,
       fontSize: Math.max(...spans.map((span) => span.fontSize)),
+      fontFamily: spans.find((span) => span.fontFamily)?.fontFamily ?? null,
+      baselinePercent:
+        baselines.length > 0 ? baselines.reduce((total, value) => total + value, 0) / baselines.length : null,
       spanIds: spans.map((span) => span.id),
     }
   }
@@ -2813,6 +2833,8 @@
       widthPercent: parseLooseBoundedNumber(textEditWidth, 5, 100) ?? Math.max(selectedTextSpan.widthPercent, 5),
       heightPercent: parseLooseBoundedNumber(textEditHeight, 5, 100) ?? Math.max(selectedTextSpan.heightPercent, 5),
       fontSize: parseLooseBoundedNumber(textEditFontSize, 8, 72) ?? selectedTextSpan.fontSize,
+      fontFamily: selectedTextSpan.fontFamily ?? null,
+      baselinePercent: selectedTextSpan.baselinePercent ?? null,
     })
   }
 
@@ -2843,6 +2865,8 @@
       widthPercent,
       heightPercent,
       fontSize,
+      fontFamily: selectedTextSpan.fontFamily ?? null,
+      baselinePercent: selectedTextSpan.baselinePercent ?? null,
     })
   }
 
@@ -2950,6 +2974,8 @@
       widthPercent: matchTarget.widthPercent,
       heightPercent: matchTarget.heightPercent,
       fontSize: matchTarget.fontSize,
+      fontFamily: matchTarget.fontFamily ?? null,
+      baselinePercent: matchTarget.baselinePercent ?? null,
     } satisfies DocumentTextSearchResult
   }
 
@@ -3132,6 +3158,8 @@
         widthPercent: targetRegion.widthPercent,
         heightPercent: targetRegion.heightPercent,
         fontSize: targetRegion.fontSize,
+        fontFamily: targetRegion.fontFamily ?? currentResult.fontFamily ?? null,
+        baselinePercent: targetRegion.baselinePercent ?? currentResult.baselinePercent ?? null,
         alignment: textEditAlignment,
       })
 
@@ -3199,6 +3227,8 @@
           widthPercent: result.widthPercent,
           heightPercent: result.heightPercent,
           fontSize: result.fontSize,
+          fontFamily: result.fontFamily ?? null,
+          baselinePercent: result.baselinePercent ?? null,
           alignment: textEditAlignment,
         })
 
@@ -3698,6 +3728,8 @@
       widthPercent: Math.max(selectedTextSpan.widthPercent, 5),
       heightPercent: Math.max(selectedTextSpan.heightPercent, 5),
       fontSize: selectedTextSpan.fontSize,
+      fontFamily: selectedTextSpan.fontFamily ?? null,
+      baselinePercent: selectedTextSpan.baselinePercent ?? null,
     })
   }
 
@@ -3949,11 +3981,13 @@
       applyTextEditRegion(
         snapTextTargetRegion(
           {
-        xPercent: clamp(startRegion.xPercent + deltaXPercent, 0, 100 - startRegion.widthPercent),
-        yPercent: clamp(startRegion.yPercent + deltaYPercent, 0, 100 - startRegion.heightPercent),
-        widthPercent: startRegion.widthPercent,
-        heightPercent: startRegion.heightPercent,
-        fontSize: startRegion.fontSize,
+            xPercent: clamp(startRegion.xPercent + deltaXPercent, 0, 100 - startRegion.widthPercent),
+            yPercent: clamp(startRegion.yPercent + deltaYPercent, 0, 100 - startRegion.heightPercent),
+            widthPercent: startRegion.widthPercent,
+            heightPercent: startRegion.heightPercent,
+            fontSize: startRegion.fontSize,
+            fontFamily: startRegion.fontFamily ?? null,
+            baselinePercent: startRegion.baselinePercent ?? null,
           },
           handle,
         ),
@@ -4006,6 +4040,8 @@
           widthPercent: right - left,
           heightPercent: bottom - top,
           fontSize: startRegion.fontSize,
+          fontFamily: startRegion.fontFamily ?? null,
+          baselinePercent: startRegion.baselinePercent ?? null,
         },
         handle,
       ),

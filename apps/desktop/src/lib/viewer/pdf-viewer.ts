@@ -227,6 +227,8 @@ export function buildPdfPageTextTargets(
     right: number
     bottom: number
     fontSize: number
+    fontFamily?: string | null
+    baselinePercent?: number | null
   }>,
   pageNumber: number,
   pageWidth: number,
@@ -255,6 +257,8 @@ export function buildPdfPageTextTargets(
         widthPercent: (spanWidth / pageWidth) * 100,
         heightPercent: (spanHeight / pageHeight) * 100,
         fontSize: span.fontSize,
+        fontFamily: span.fontFamily ?? null,
+        baselinePercent: span.baselinePercent ?? null,
       })
       continue
     }
@@ -282,6 +286,8 @@ export function buildPdfPageTextTargets(
         widthPercent: ((right - left) / pageWidth) * 100,
         heightPercent: (spanHeight / pageHeight) * 100,
         fontSize: span.fontSize,
+        fontFamily: span.fontFamily ?? null,
+        baselinePercent: span.baselinePercent ?? null,
       })
 
       searchStart = wordEnd
@@ -315,7 +321,11 @@ async function extractPageTextLayoutData(
       }
 
       const transform = Util.transform(viewport.transform, item.transform)
-      const style = item.fontName ? (content.styles as Record<string, { ascent?: number; descent?: number }> | undefined)?.[item.fontName] : undefined
+      const style = item.fontName
+        ? (content.styles as Record<string, { ascent?: number; descent?: number; fontFamily?: string }> | undefined)?.[
+            item.fontName
+          ]
+        : undefined
       const width = Math.max(item.width ? item.width * viewport.scale : 0, Math.abs(transform[0]), 1)
       const fontHeight = Math.max(
         item.height ? item.height * viewport.scale : 0,
@@ -332,6 +342,7 @@ async function extractPageTextLayoutData(
       const left = clampNumber(transform[4], 0, Math.max(0, viewport.width - 1))
       const top = clampNumber(transform[5] - fontHeight * ascent, 0, Math.max(0, viewport.height - 1))
       const bottom = clampNumber(transform[5] - fontHeight * descent, top + 1, viewport.height)
+      const baselinePercent = clampNumber((transform[5] / viewport.height) * 100, 0, 100)
 
       return {
         id: `${pageNumber}-${index}-${text.slice(0, 24)}`,
@@ -342,6 +353,8 @@ async function extractPageTextLayoutData(
         right: clampNumber(left + width, 0, viewport.width),
         bottom,
         fontSize: clampNumber(fontHeight, 8, 72),
+        fontFamily: style?.fontFamily ?? null,
+        baselinePercent,
       }
     })
     .filter((span): span is NonNullable<typeof span> => Boolean(span))
