@@ -2577,6 +2577,47 @@
     } satisfies TextTargetRegion
   }
 
+  function shouldInsertSpaceBetweenTextTargets(previousSpan: PdfPageTextSpan, currentSpan: PdfPageTextSpan) {
+    if (!areTextTargetsOnSameLine(previousSpan, currentSpan)) {
+      return true
+    }
+
+    if (/^[,.;:!?%)\]}]/.test(currentSpan.text)) {
+      return false
+    }
+
+    if (/[(\[{/-]$/.test(previousSpan.text)) {
+      return false
+    }
+
+    const gapPercent = currentSpan.xPercent - (previousSpan.xPercent + previousSpan.widthPercent)
+    const previousCharacterWidth = previousSpan.widthPercent / Math.max(previousSpan.text.trim().length, 1)
+    const currentCharacterWidth = currentSpan.widthPercent / Math.max(currentSpan.text.trim().length, 1)
+    const minimumWordGap = Math.max(0.08, Math.min(previousCharacterWidth, currentCharacterWidth) * 0.12)
+
+    return gapPercent > minimumWordGap
+  }
+
+  function joinTextTargetSequenceText(spans: PdfPageTextSpan[]) {
+    let combinedText = ''
+
+    spans.forEach((span, index) => {
+      const normalizedText = span.text.replace(/\s+/g, ' ').trim()
+      if (!normalizedText) {
+        return
+      }
+
+      if (!combinedText) {
+        combinedText = normalizedText
+        return
+      }
+
+      combinedText = `${combinedText}${shouldInsertSpaceBetweenTextTargets(spans[index - 1], span) ? ' ' : ''}${normalizedText}`
+    })
+
+    return combinedText.replace(/\s+/g, ' ').trim()
+  }
+
   function buildSelectedTextTarget(spans: PdfPageTextSpan[]): SelectedTextTarget | null {
     if (spans.length === 0) {
       return null
@@ -2590,11 +2631,7 @@
     return {
       id: spans.map((span) => span.id).join('::'),
       pageNumber: spans[0].pageNumber,
-      text: spans
-        .map((span) => span.text.trim())
-        .join(' ')
-        .replace(/\s+/g, ' ')
-        .trim(),
+      text: joinTextTargetSequenceText(spans),
       xPercent: left,
       yPercent: top,
       widthPercent: right - left,
@@ -2810,11 +2847,7 @@
   }
 
   function normalizeTextTargetSequenceText(spans: PdfPageTextSpan[]) {
-    return spans
-      .map((span) => span.text.trim())
-      .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim()
+    return joinTextTargetSequenceText(spans)
   }
 
   function clearTextSearchState(options: { clearQuery?: boolean; clearReplacement?: boolean } = {}) {

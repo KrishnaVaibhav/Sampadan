@@ -63,6 +63,11 @@ type UnsupportedToken = {
 
 type ParsedContentToken = TextOperandToken | NameToken | WordToken | NumberToken | ArrayToken | UnsupportedToken
 
+type LayoutFontMetrics = {
+  widthOfTextAtSize: (text: string, size: number) => number
+  heightAtSize?: (size: number, options?: { descender?: boolean }) => number
+}
+
 async function loadDocument(bytes: Uint8Array) {
   const { PDFDocument } = await getPdfLib()
   return PDFDocument.load(bytes.slice(), { updateMetadata: false })
@@ -212,6 +217,48 @@ function resolveAlignedTextX(options: {
 
 function normalizeTextForMatch(text: string) {
   return text.replace(/\s+/g, ' ').trim()
+}
+
+function resolveTextHeightAtSize(font: LayoutFontMetrics, size: number) {
+  return typeof font.heightAtSize === 'function' ? font.heightAtSize(size, { descender: false }) : size
+}
+
+function resolveEditPadding(
+  rect: { width: number; height: number },
+  fontSize: number,
+  compactLayout: boolean,
+) {
+  if (compactLayout) {
+    return {
+      horizontal: clampNumber(Math.min(rect.width * 0.02, fontSize * 0.12), 0.75, 3.5),
+      vertical: clampNumber(Math.min(rect.height * 0.05, fontSize * 0.08), 0.5, 2.4),
+    }
+  }
+
+  const sharedPadding = clampNumber(Math.min(rect.width, rect.height) * 0.08, 8, 16)
+  return {
+    horizontal: sharedPadding,
+    vertical: sharedPadding,
+  }
+}
+
+function resolveTextBlockHeight(lineCount: number, lineHeight: number, textHeight: number) {
+  if (lineCount <= 0) {
+    return 0
+  }
+
+  return textHeight + Math.max(0, lineCount - 1) * lineHeight
+}
+
+function resolveCenteredTextBlockY(options: {
+  rectY: number
+  rectHeight: number
+  lineCount: number
+  lineHeight: number
+  textHeight: number
+}) {
+  const blockHeight = resolveTextBlockHeight(options.lineCount, options.lineHeight, options.textHeight)
+  return options.rectY + Math.max(0, (options.rectHeight - blockHeight) / 2)
 }
 
 function encodePdfContentString(value: string) {
@@ -1113,6 +1160,7 @@ export async function replaceRegionWithTextInDocument(
     fontSize: number
     alignment: TextEditAlignment
     autoFit?: boolean
+    compactLayout?: boolean
   },
 ) {
   const { StandardFonts, rgb } = await getPdfLib()
@@ -1121,6 +1169,7 @@ export async function replaceRegionWithTextInDocument(
   const text = options.text.trim()
   const pageIndexes = normalizePageIndexes(options.pageIndexes, document.getPageCount())
   const baseFontSize = clampNumber(options.fontSize, 8, 72)
+  const compactLayout = options.compactLayout ?? true
 
   for (const pageIndex of pageIndexes) {
     const page = document.getPage(pageIndex)
@@ -1133,45 +1182,64 @@ export async function replaceRegionWithTextInDocument(
       widthPercent: options.widthPercent,
       heightPercent: options.heightPercent,
     })
-    const padding = clampNumber(Math.min(rect.width, rect.height) * 0.08, 8, 16)
+    const padding = resolveEditPadding(rect, baseFontSize, compactLayout)
+    const whiteoutBleed = compactLayout
+      ? clampNumber(Math.min(baseFontSize * 0.16, Math.min(rect.width, rect.height) * 0.05), 0.6, 2.2)
+      : 0
 
     page.drawRectangle({
-      x: rect.x,
-      y: rect.y,
-      width: rect.width,
-      height: rect.height,
+      x: Math.max(0, rect.x - whiteoutBleed),
+      y: Math.max(0, rect.y - whiteoutBleed / 2),
+      width: Math.min(width - Math.max(0, rect.x - whiteoutBleed), rect.width + whiteoutBleed * 2),
+      height: Math.min(height - Math.max(0, rect.y - whiteoutBleed / 2), rect.height + whiteoutBleed),
       color: rgb(1, 1, 1),
       opacity: 1,
-      borderColor: rgb(0.86, 0.88, 0.91),
-      borderWidth: 0.6,
-      borderOpacity: 0.85,
+      ...(compactLayout
+        ? {}
+        : {
+            borderColor: rgb(0.86, 0.88, 0.91),
+            borderWidth: 0.6,
+            borderOpacity: 0.85,
+          }),
     })
 
     if (!text) {
       continue
     }
 
-    const maxTextWidth = Math.max(36, rect.width - padding * 2)
-    const { fontSize, lines, lineHeight } = resolveFittedTextLayout({
+    const contentX = rect.x + padding.horizontal
+    const contentY = rect.y + padding.vertical
+    const contentWidth = Math.max(24, rect.width - padding.horizontal * 2)
+    const contentHeight = Math.max(12, rect.height - padding.vertical * 2)
+    const { fontSize, lines, lineHeight, textHeight } = resolveFittedTextLayout({
       text,
       font,
       requestedSize: baseFontSize,
-      maxTextWidth,
-      maxTextHeight: Math.max(18, rect.height - padding * 2),
+      maxTextWidth: contentWidth,
+      maxTextHeight: contentHeight,
       autoFit: options.autoFit ?? false,
+      preferSingleLine: compactLayout,
+      lineHeightMultiplier: compactLayout ? 1.1 : 1.18,
+    })
+    const blockBottomY = resolveCenteredTextBlockY({
+      rectY: contentY,
+      rectHeight: contentHeight,
+      lineCount: lines.length,
+      lineHeight,
+      textHeight,
     })
 
     for (const [lineIndex, line] of lines.entries()) {
       const textWidth = font.widthOfTextAtSize(line, fontSize)
       page.drawText(line, {
         x: resolveAlignedTextX({
-          rectX: rect.x,
-          rectWidth: rect.width,
-          padding,
+          rectX: contentX,
+          rectWidth: contentWidth,
+          padding: 0,
           textWidth,
           alignment: options.alignment,
         }),
-        y: rect.y + rect.height - padding - fontSize - lineIndex * lineHeight,
+        y: blockBottomY + (lines.length - lineIndex - 1) * lineHeight,
         size: fontSize,
         font,
         color: rgb(0.08, 0.1, 0.12),
@@ -1231,6 +1299,7 @@ export async function replaceTargetedTextInDocument(
       fontSize: options.fontSize,
       alignment: options.alignment,
       autoFit: true,
+      compactLayout: true,
     }),
     strategy: 'overlay',
   }
@@ -1238,33 +1307,55 @@ export async function replaceTargetedTextInDocument(
 
 function resolveFittedTextLayout(options: {
   text: string
-  font: { widthOfTextAtSize: (text: string, size: number) => number }
+  font: LayoutFontMetrics
   requestedSize: number
   maxTextWidth: number
   maxTextHeight: number
   autoFit: boolean
+  preferSingleLine?: boolean
+  lineHeightMultiplier?: number
 }) {
+  const lineHeightMultiplier = options.lineHeightMultiplier ?? 1.12
   let fontSize = options.requestedSize
 
   while (fontSize >= 8) {
-    const lineHeight = fontSize * 1.24
-    const maxLines = Math.max(1, Math.floor((options.maxTextHeight + fontSize * 0.2) / lineHeight))
+    const textHeight = resolveTextHeightAtSize(options.font, fontSize)
+
+    if (options.preferSingleLine && !options.text.replace(/\r\n/g, '\n').includes('\n')) {
+      const singleLine = options.text.replace(/\s+/g, ' ').trim()
+      if (singleLine) {
+        const singleLineWidth = options.font.widthOfTextAtSize(singleLine, fontSize)
+        if (singleLineWidth <= options.maxTextWidth && textHeight <= options.maxTextHeight) {
+          return {
+            fontSize,
+            lines: [singleLine],
+            lineHeight: Math.max(textHeight * 1.04, fontSize * 1.06),
+            textHeight,
+          }
+        }
+      }
+    }
+
+    const lineHeight = Math.max(textHeight * 1.04, fontSize * lineHeightMultiplier)
+    const maxLines = Math.max(1, Math.floor((options.maxTextHeight - textHeight) / lineHeight) + 1)
     const lines = wrapTextToWidth(options.text, options.font, fontSize, options.maxTextWidth, maxLines)
-    const requiredHeight = Math.max(fontSize, lines.length * lineHeight)
+    const requiredHeight = resolveTextBlockHeight(lines.length, lineHeight, textHeight)
 
     if (!options.autoFit || requiredHeight <= options.maxTextHeight || fontSize <= 8) {
-      return { fontSize, lines, lineHeight }
+      return { fontSize, lines, lineHeight, textHeight }
     }
 
     fontSize -= 1
   }
 
-  const lineHeight = 8 * 1.24
-  const maxLines = Math.max(1, Math.floor((options.maxTextHeight + 8 * 0.2) / lineHeight))
+  const textHeight = resolveTextHeightAtSize(options.font, 8)
+  const lineHeight = Math.max(textHeight * 1.04, 8 * lineHeightMultiplier)
+  const maxLines = Math.max(1, Math.floor((options.maxTextHeight - textHeight) / lineHeight) + 1)
   return {
     fontSize: 8,
     lines: wrapTextToWidth(options.text, options.font, 8, options.maxTextWidth, maxLines),
     lineHeight,
+    textHeight,
   }
 }
 
@@ -1531,7 +1622,7 @@ function inferAttachmentMimeType(fileName: string) {
 
 function wrapTextToWidth(
   text: string,
-  font: { widthOfTextAtSize: (text: string, size: number) => number },
+  font: LayoutFontMetrics,
   size: number,
   maxWidth: number,
   maxLines: number,
@@ -1572,7 +1663,7 @@ function wrapTextToWidth(
 
 function ellipsizeText(
   text: string,
-  font: { widthOfTextAtSize: (text: string, size: number) => number },
+  font: LayoutFontMetrics,
   size: number,
   maxWidth: number,
 ) {

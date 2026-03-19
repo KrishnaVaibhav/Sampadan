@@ -55,4 +55,27 @@ describe('buildPdfPageTextTargets', () => {
       }),
     )
   })
+
+  test('uses weighted spacing so split word targets do not exaggerate gaps', () => {
+    const targets = buildPdfPageTextTargets(
+      [
+        {
+          id: 'span-3',
+          text: 'A B',
+          left: 0,
+          top: 80,
+          right: 90,
+          bottom: 100,
+          fontSize: 14,
+        },
+      ],
+      1,
+      100,
+      100,
+    )
+
+    expect(targets.map((target) => target.text)).toEqual(['A', 'B'])
+    const gap = targets[1].xPercent - (targets[0].xPercent + targets[0].widthPercent)
+    expect(gap).toBeLessThan(18)
+  })
 })

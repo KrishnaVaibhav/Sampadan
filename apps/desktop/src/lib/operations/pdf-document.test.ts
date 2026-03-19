@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'vitest'
 
 import { createSamplePdf, readPdfSummary } from '../../test/pdf-fixtures'
+import { loadPdfProxy } from '../pdf-engine'
+import { extractPageTextSpans } from '../viewer/pdf-viewer'
 import {
   addAttachmentToDocument,
   addFreeTextBlockToDocument,
@@ -472,5 +474,48 @@ describe('real PDF document operations', () => {
     expect(replaced.bytes.length).toBeGreaterThan(source.length)
     const text = await readPdfText(replaced.bytes)
     expect(text).toContain('Body content for page 1')
+  })
+
+  test('targeted overlay fallback keeps replacement text close to the original line position', async () => {
+    const source = await createSamplePdf(1)
+
+    const replaced = await replaceTargetedTextInDocument(source, {
+      targetText: 'Body content for page 1',
+      replacementText: 'Edited body copy for page one',
+      pageIndex: 0,
+      targetOccurrence: 0,
+      xPercent: 8,
+      yPercent: 10,
+      widthPercent: 18,
+      heightPercent: 5,
+      fontSize: 14,
+      alignment: 'left',
+    })
+
+    expect(replaced.strategy).toBe('overlay')
+
+    const proxy = await loadPdfProxy(replaced.bytes)
+    try {
+      const spans = await extractPageTextSpans(proxy, 1, 1)
+      const replacementSpans = spans
+        .filter((span) => ['Edited', 'body', 'copy', 'for', 'page', 'one'].includes(span.text))
+        .sort((left, right) => left.xPercent - right.xPercent)
+
+      expect(replacementSpans.length).toBeGreaterThanOrEqual(3)
+
+      const left = Math.min(...replacementSpans.map((span) => span.xPercent))
+      const top = Math.min(...replacementSpans.map((span) => span.yPercent))
+      const firstLineSpans = replacementSpans.filter((span) => Math.abs(span.yPercent - top) <= 1.5)
+      expect(firstLineSpans.length).toBeGreaterThanOrEqual(2)
+      const firstLineGap = firstLineSpans[1].xPercent - (firstLineSpans[0].xPercent + firstLineSpans[0].widthPercent)
+
+      expect(left).toBeGreaterThanOrEqual(7.5)
+      expect(left).toBeLessThan(10)
+      expect(top).toBeGreaterThanOrEqual(9)
+      expect(top).toBeLessThan(12.5)
+      expect(firstLineGap).toBeLessThan(2.6)
+    } finally {
+      await proxy.destroy()
+    }
   })
 })

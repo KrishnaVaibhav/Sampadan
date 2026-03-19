@@ -186,6 +186,38 @@ function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
 }
 
+function measureApproximateGlyphWeight(character: string) {
+  if (/\s/.test(character)) {
+    return 0.36
+  }
+
+  if (/[.,;:!'`|]/.test(character)) {
+    return 0.42
+  }
+
+  if (/[()\[\]{}]/.test(character)) {
+    return 0.52
+  }
+
+  if (/[ilIjtfr]/.test(character)) {
+    return 0.62
+  }
+
+  if (/[mwMW@%&QGO]/.test(character)) {
+    return 1.34
+  }
+
+  if (/[A-Z0-9]/.test(character)) {
+    return 1.02
+  }
+
+  return 0.94
+}
+
+function measureApproximateTextWeight(text: string) {
+  return Array.from(text).reduce((total, character) => total + measureApproximateGlyphWeight(character), 0)
+}
+
 export function buildPdfPageTextTargets(
   rawSpans: Array<{
     id: string
@@ -210,7 +242,7 @@ export function buildPdfPageTextTargets(
 
     const spanWidth = Math.max(span.right - span.left, 1)
     const spanHeight = Math.max(span.bottom - span.top, 1)
-    const totalUnits = Math.max(normalizedText.length, 1)
+    const totalWeight = Math.max(measureApproximateTextWeight(normalizedText), 1)
     const words = normalizedText.match(/\S+/g) ?? []
 
     if (words.length <= 1) {
@@ -236,8 +268,10 @@ export function buildPdfPageTextTargets(
       }
 
       const wordEnd = wordStart + word.length
-      const left = span.left + (wordStart / totalUnits) * spanWidth
-      const right = wordIndex === words.length - 1 ? span.right : span.left + (wordEnd / totalUnits) * spanWidth
+      const leftWeight = measureApproximateTextWeight(normalizedText.slice(0, wordStart))
+      const rightWeight = measureApproximateTextWeight(normalizedText.slice(0, wordEnd))
+      const left = span.left + (leftWeight / totalWeight) * spanWidth
+      const right = wordIndex === words.length - 1 ? span.right : span.left + (rightWeight / totalWeight) * spanWidth
 
       targets.push({
         id: `${span.id}-word-${wordIndex}`,
@@ -271,6 +305,7 @@ async function extractPageTextLayoutData(
     hasEOL?: boolean
     width?: number
     height?: number
+    fontName?: string
     transform?: number[]
   }>)
     .map((item, index) => {
@@ -280,14 +315,23 @@ async function extractPageTextLayoutData(
       }
 
       const transform = Util.transform(viewport.transform, item.transform)
+      const style = item.fontName ? (content.styles as Record<string, { ascent?: number; descent?: number }> | undefined)?.[item.fontName] : undefined
       const width = Math.max(item.width ? item.width * viewport.scale : 0, Math.abs(transform[0]), 1)
-      const height = Math.max(
+      const fontHeight = Math.max(
         item.height ? item.height * viewport.scale : 0,
         Math.hypot(transform[2], transform[3]),
         8,
       )
+      const ascent =
+        typeof style?.ascent === 'number'
+          ? style.ascent
+          : typeof style?.descent === 'number'
+            ? 1 + style.descent
+            : 0.88
+      const descent = typeof style?.descent === 'number' ? style.descent : ascent - 1
       const left = clampNumber(transform[4], 0, Math.max(0, viewport.width - 1))
-      const top = clampNumber(transform[5] - height, 0, Math.max(0, viewport.height - 1))
+      const top = clampNumber(transform[5] - fontHeight * ascent, 0, Math.max(0, viewport.height - 1))
+      const bottom = clampNumber(transform[5] - fontHeight * descent, top + 1, viewport.height)
 
       return {
         id: `${pageNumber}-${index}-${text.slice(0, 24)}`,
@@ -296,8 +340,8 @@ async function extractPageTextLayoutData(
         left,
         top,
         right: clampNumber(left + width, 0, viewport.width),
-        bottom: clampNumber(top + height, 0, viewport.height),
-        fontSize: clampNumber(height * 0.9, 8, 72),
+        bottom,
+        fontSize: clampNumber(fontHeight, 8, 72),
       }
     })
     .filter((span): span is NonNullable<typeof span> => Boolean(span))
