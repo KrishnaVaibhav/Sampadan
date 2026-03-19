@@ -211,6 +211,12 @@
     pointerId: number
   }
 
+  type TextTargetOccurrenceMatch = {
+    occurrenceIndex: number
+    startIndex: number
+    endIndex: number
+  }
+
   type SelectedTextTarget = PdfPageTextSpan & {
     spanIds: string[]
   }
@@ -353,6 +359,18 @@
       if (textTargetMode && inlineTextEditorOpen && selectedTextSpan && modifier && event.key === 'Enter') {
         event.preventDefault()
         void replaceSelectedTextTarget()
+        return
+      }
+
+      if (textTargetMode && selectedTextSpan && !textInputTarget && modifier && event.shiftKey && event.key.toLowerCase() === 'r') {
+        event.preventDefault()
+        void replaceAllSelectedTextMatches()
+        return
+      }
+
+      if (textTargetMode && selectedTextSpan && !textInputTarget && event.key === 'F3') {
+        event.preventDefault()
+        void jumpToMatchingTextOccurrence(event.shiftKey ? -1 : 1)
         return
       }
 
@@ -1780,6 +1798,91 @@
     }
   }
 
+  async function replaceAllSelectedTextMatches() {
+    if (!workspace || busy || !selectedTextSpan) return
+
+    const replacementText = textEditContent.trim()
+    if (!replacementText) {
+      reportError(new Error('Enter replacement text before editing the selected page text.'), 'Replacement text is required')
+      return
+    }
+
+    const normalizedTargetText = selectedTextSpan.text.replace(/\s+/g, ' ').trim().toLowerCase()
+    const normalizedReplacementText = replacementText.replace(/\s+/g, ' ').trim().toLowerCase()
+    if (normalizedTargetText && normalizedReplacementText.includes(normalizedTargetText)) {
+      reportError(
+        new Error('Replace all requires replacement text that does not contain the selected match text.'),
+        'Replace all would create ambiguous repeated matches',
+      )
+      return
+    }
+
+    const matches = resolveMatchingSelectedTextOccurrences()
+    if (matches.length === 0) {
+      reportError(new Error('No matching occurrences are available for replacement.'), 'No matching occurrences found')
+      return
+    }
+
+    const currentWorkspace = workspace
+    let workingBytes = currentWorkspace.bytes
+    let contentStreamReplacements = 0
+    let overlayReplacements = 0
+
+    busy = true
+    statusTone = 'busy'
+    status = `Replacing ${matches.length} matching text occurrence${matches.length === 1 ? '' : 's'} on page ${currentPage}`
+    lastError = null
+
+    try {
+      for (const match of [...matches].reverse()) {
+        const matchSpans = currentPageTextSpans.slice(match.startIndex, match.endIndex + 1)
+        const matchTarget = buildSelectedTextTarget(matchSpans)
+        if (!matchTarget) {
+          continue
+        }
+
+        const result = await replaceTargetedTextInDocument(workingBytes, {
+          targetText: selectedTextSpan.text,
+          replacementText,
+          pageIndex: currentPage - 1,
+          targetOccurrence: match.occurrenceIndex,
+          xPercent: matchTarget.xPercent,
+          yPercent: matchTarget.yPercent,
+          widthPercent: matchTarget.widthPercent,
+          heightPercent: matchTarget.heightPercent,
+          fontSize: matchTarget.fontSize,
+          alignment: textEditAlignment,
+        })
+
+        workingBytes = result.bytes
+        if (result.strategy === 'content-stream') {
+          contentStreamReplacements += 1
+        } else {
+          overlayReplacements += 1
+        }
+      }
+
+      await commitGeneratedPdf(workingBytes, {
+        fileName: currentWorkspace.fileName,
+        current: currentPage,
+      })
+      inlineTextEditorOpen = false
+
+      const replacementCount = contentStreamReplacements + overlayReplacements
+      statusTone = 'idle'
+      status =
+        overlayReplacements === 0
+          ? `Replaced ${replacementCount} matching occurrence${replacementCount === 1 ? '' : 's'} on page ${currentPage}`
+          : contentStreamReplacements === 0
+            ? `Replaced ${replacementCount} matching occurrence${replacementCount === 1 ? '' : 's'} on page ${currentPage} with visual fallback`
+            : `Replaced ${replacementCount} matching occurrence${replacementCount === 1 ? '' : 's'} on page ${currentPage} with mixed rewrite and fallback`
+    } catch (error) {
+      reportError(error, 'Failed to replace all matching page text')
+    } finally {
+      busy = false
+    }
+  }
+
   async function addSelectedTextMarkup(kind: PdfMarkupAnnotationKind) {
     if (!workspace || busy || !selectedTextSpan) return
 
@@ -2662,41 +2765,71 @@
     })
   }
 
-  function resolveSelectedTextOccurrence() {
-    if (!selectedTextSpan || selectedTextSpan.spanIds.length === 0) {
-      return 0
-    }
-
-    const selectedSequenceLength = selectedTextSpan.spanIds.length
-    const selectedSequenceText = selectedTextSpans
+  function normalizeTextTargetSequenceText(spans: PdfPageTextSpan[]) {
+    return spans
       .map((span) => span.text.trim())
       .join(' ')
       .replace(/\s+/g, ' ')
       .trim()
+  }
 
-    let occurrenceIndex = 0
+  function resolveMatchingSelectedTextOccurrences() {
+    if (!selectedTextSpan || selectedTextSpan.spanIds.length === 0) {
+      return []
+    }
+
+    const selectedSequenceLength = selectedTextSpan.spanIds.length
+    const selectedSequenceText = normalizeTextTargetSequenceText(selectedTextSpans)
+    const matches: TextTargetOccurrenceMatch[] = []
 
     for (let index = 0; index <= currentPageTextSpans.length - selectedSequenceLength; index += 1) {
       const sequence = currentPageTextSpans.slice(index, index + selectedSequenceLength)
-      const sequenceText = sequence
-        .map((span) => span.text.trim())
-        .join(' ')
-        .replace(/\s+/g, ' ')
-        .trim()
+      const sequenceText = normalizeTextTargetSequenceText(sequence)
 
       if (sequenceText !== selectedSequenceText) {
         continue
       }
 
+      matches.push({
+        occurrenceIndex: matches.length,
+        startIndex: index,
+        endIndex: index + selectedSequenceLength - 1,
+      })
+    }
+
+    return matches
+  }
+
+  function resolveSelectedTextOccurrence() {
+    if (!selectedTextSpan || selectedTextSpan.spanIds.length === 0) {
+      return 0
+    }
+
+    for (const match of resolveMatchingSelectedTextOccurrences()) {
+      const sequence = currentPageTextSpans.slice(match.startIndex, match.endIndex + 1)
       const isActiveSelection = sequence.every((span, sequenceIndex) => span.id === selectedTextSpan.spanIds[sequenceIndex])
       if (isActiveSelection) {
-        return occurrenceIndex
+        return match.occurrenceIndex
       }
-
-      occurrenceIndex += 1
     }
 
     return 0
+  }
+
+  async function jumpToMatchingTextOccurrence(direction: -1 | 1) {
+    const matches = resolveMatchingSelectedTextOccurrences()
+    if (!selectedTextSpan || matches.length === 0) {
+      return
+    }
+
+    const selectedOccurrenceIndex = resolveSelectedTextOccurrence()
+    const nextOccurrenceIndex = (selectedOccurrenceIndex + direction + matches.length) % matches.length
+    const match = matches[nextOccurrenceIndex]
+    if (!match) {
+      return
+    }
+
+    await applySelectedTextRange(match.startIndex, match.endIndex, { focusEditor: false })
   }
 
   function isTextInputTarget(target: EventTarget | null) {
@@ -4024,6 +4157,29 @@
           </div>
           <div class="tool-grid compact-tool-grid">
             <button
+              data-testid="previous-text-match-button"
+              on:click={() => jumpToMatchingTextOccurrence(-1)}
+              disabled={busy || !workspace || !selectedTextSpan || resolveMatchingSelectedTextOccurrences().length < 2}
+            >
+              Prev Match
+            </button>
+            <button
+              data-testid="next-text-match-button"
+              on:click={() => jumpToMatchingTextOccurrence(1)}
+              disabled={busy || !workspace || !selectedTextSpan || resolveMatchingSelectedTextOccurrences().length < 2}
+            >
+              Next Match
+            </button>
+            <button
+              data-testid="replace-all-text-matches-button"
+              on:click={replaceAllSelectedTextMatches}
+              disabled={busy || !workspace || !selectedTextSpan || !textEditContent.trim()}
+            >
+              Replace All Matches
+            </button>
+          </div>
+          <div class="tool-grid compact-tool-grid">
+            <button
               data-testid="highlight-selected-text-button"
               on:click={() => addSelectedTextMarkup('highlight')}
               disabled={busy || !workspace || !selectedTextSpan}
@@ -4047,11 +4203,17 @@
           </div>
           <span class="muted">
             Drag across words, double-click for a full line, use ArrowUp/Down for lines, Cmd/Ctrl+Arrow for line
-            edges, Shift to extend, Cmd/Ctrl+L for a full line, and Alt+Backspace to restore the selected text.
+            edges, Shift to extend, F3 for match navigation, Cmd/Ctrl+Shift+R for replace-all on the page, Cmd/Ctrl+L
+            for a full line, and Alt+Backspace to restore the selected text.
           </span>
           {#if selectedTextSpan}
+            {@const textMatchCount = resolveMatchingSelectedTextOccurrences().length || 1}
+            {@const textMatchIndex = resolveSelectedTextOccurrence() + 1}
             <div class="stack-list attachment-entry">
               <span>Selected: {selectedTextSpan.text}</span>
+              <span>
+                Match {textMatchIndex} of {textMatchCount} on page
+              </span>
               {#if selectedTextSpan.spanIds.length > 1}
                 <span>{selectedTextSpan.spanIds.length} contiguous targets selected</span>
               {/if}
@@ -4451,8 +4613,35 @@
                       <button type="button" on:click={() => addSelectedTextMarkup('strikeout')} disabled={busy}>
                         Strike Out
                       </button>
+                      <button
+                        type="button"
+                        data-testid="inline-previous-match-button"
+                        on:click={() => jumpToMatchingTextOccurrence(-1)}
+                        disabled={busy || resolveMatchingSelectedTextOccurrences().length < 2}
+                      >
+                        Prev Match
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="inline-next-match-button"
+                        on:click={() => jumpToMatchingTextOccurrence(1)}
+                        disabled={busy || resolveMatchingSelectedTextOccurrences().length < 2}
+                      >
+                        Next Match
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="inline-replace-all-matches-button"
+                        on:click={replaceAllSelectedTextMatches}
+                        disabled={busy || !textEditContent.trim()}
+                      >
+                        Replace All
+                      </button>
                     </div>
-                    <span class="muted inline-hint">Cmd/Ctrl+Enter applies the replacement. Esc clears the target.</span>
+                    <span class="muted inline-hint">
+                      Cmd/Ctrl+Enter applies the replacement. F3 navigates matching text. Cmd/Ctrl+Shift+R replaces all
+                      page matches. Esc clears the target.
+                    </span>
                   </section>
                 {/if}
               {/if}

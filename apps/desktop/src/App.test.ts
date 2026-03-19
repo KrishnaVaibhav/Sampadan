@@ -247,6 +247,7 @@ vi.mock('./lib/session/recent-files', () => ({
 
 import App from './App.svelte'
 import * as annotationOperations from './lib/operations/pdf-annotations'
+import * as pdfDocumentOperations from './lib/operations/pdf-document'
 import * as viewerModule from './lib/viewer/pdf-viewer'
 
 function buildDefaultTextTargetSpans(pageNumber: number) {
@@ -314,6 +315,71 @@ function buildMultilineTextTargetSpans(pageNumber: number) {
       xPercent: 30.7,
       yPercent: 22,
       widthPercent: 7.8,
+      heightPercent: 4,
+      fontSize: 16,
+    },
+  ]
+}
+
+function buildRepeatedPhraseTextTargetSpans(pageNumber: number) {
+  return [
+    {
+      id: `target-${pageNumber}-total-1`,
+      pageNumber,
+      text: 'Total',
+      xPercent: 12,
+      yPercent: 14,
+      widthPercent: 9,
+      heightPercent: 4,
+      fontSize: 16,
+    },
+    {
+      id: `target-${pageNumber}-cost-1`,
+      pageNumber,
+      text: 'Cost',
+      xPercent: 21.6,
+      yPercent: 14,
+      widthPercent: 7.4,
+      heightPercent: 4,
+      fontSize: 16,
+    },
+    {
+      id: `target-${pageNumber}-total-2`,
+      pageNumber,
+      text: 'Total',
+      xPercent: 12,
+      yPercent: 22,
+      widthPercent: 9,
+      heightPercent: 4,
+      fontSize: 16,
+    },
+    {
+      id: `target-${pageNumber}-cost-2`,
+      pageNumber,
+      text: 'Cost',
+      xPercent: 21.6,
+      yPercent: 22,
+      widthPercent: 7.4,
+      heightPercent: 4,
+      fontSize: 16,
+    },
+    {
+      id: `target-${pageNumber}-total-3`,
+      pageNumber,
+      text: 'Total',
+      xPercent: 12,
+      yPercent: 30,
+      widthPercent: 9,
+      heightPercent: 4,
+      fontSize: 16,
+    },
+    {
+      id: `target-${pageNumber}-cost-3`,
+      pageNumber,
+      text: 'Cost',
+      xPercent: 21.6,
+      yPercent: 30,
+      widthPercent: 7.4,
       heightPercent: 4,
       fontSize: 16,
     },
@@ -449,6 +515,7 @@ beforeEach(() => {
   vi.mocked(annotationOperations.addTextMarkupAnnotationToDocument).mockClear()
   vi.mocked(annotationOperations.removeAnnotationFromDocument).mockClear()
   vi.mocked(annotationOperations.updateAnnotationInDocument).mockClear()
+  vi.mocked(pdfDocumentOperations.replaceTargetedTextInDocument).mockClear()
   vi.mocked(viewerModule.extractPageTextSpans).mockReset()
   vi.mocked(viewerModule.extractPageTextSpans).mockImplementation(async (_pdfProxy, pageNumber: number) =>
     buildDefaultTextTargetSpans(pageNumber),
@@ -1349,6 +1416,102 @@ describe('Sampadan desktop app regression suite', () => {
     await user.type(quickReplace, 'changed again')
     await fireEvent.keyDown(window, { key: 'Backspace', altKey: true })
     expect(quickReplace.value).toBe('second row text')
+  })
+
+  test('navigates repeated text matches from the direct edit workspace', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
+    vi.mocked(viewerModule.extractPageTextSpans).mockImplementation(async (_pdfProxy, pageNumber: number) =>
+      buildRepeatedPhraseTextTargetSpans(pageNumber),
+    )
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect((screen.getByTestId('toggle-text-target-button') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    await user.click(screen.getByTestId('toggle-text-target-button'))
+    await waitFor(() => {
+      expect(screen.getAllByLabelText('Target text: Total').length).toBe(3)
+    })
+
+    await user.click(screen.getAllByLabelText('Target text: Total')[0])
+    await fireEvent.click(screen.getAllByLabelText('Target text: Cost')[0], { shiftKey: true })
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: Total Cost')).toBeTruthy()
+      expect((screen.getByTestId('next-text-match-button') as HTMLButtonElement).disabled).toBe(false)
+      expect(Number.parseFloat((screen.getByLabelText('Y %') as HTMLInputElement).value)).toBeCloseTo(14, 1)
+    })
+
+    await user.click(screen.getByTestId('next-text-match-button'))
+
+    await waitFor(() => {
+      expect(Number.parseFloat((screen.getByLabelText('Y %') as HTMLInputElement).value)).toBeCloseTo(22, 1)
+    })
+
+    await fireEvent.keyDown(window, { key: 'F3' })
+
+    await waitFor(() => {
+      expect(Number.parseFloat((screen.getByLabelText('Y %') as HTMLInputElement).value)).toBeCloseTo(30, 1)
+    })
+
+    await fireEvent.keyDown(window, { key: 'F3', shiftKey: true })
+
+    await waitFor(() => {
+      expect(Number.parseFloat((screen.getByLabelText('Y %') as HTMLInputElement).value)).toBeCloseTo(22, 1)
+    })
+
+    await user.click(screen.getByTestId('inline-previous-match-button'))
+
+    await waitFor(() => {
+      expect(Number.parseFloat((screen.getByLabelText('Y %') as HTMLInputElement).value)).toBeCloseTo(14, 1)
+    })
+  })
+
+  test('replaces all matching text occurrences on the current page in reverse match order', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
+    vi.mocked(viewerModule.extractPageTextSpans).mockImplementation(async (_pdfProxy, pageNumber: number) =>
+      buildRepeatedPhraseTextTargetSpans(pageNumber),
+    )
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect((screen.getByTestId('toggle-text-target-button') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    await user.click(screen.getByTestId('toggle-text-target-button'))
+    await waitFor(() => {
+      expect(screen.getAllByLabelText('Target text: Total').length).toBe(3)
+    })
+
+    await user.click(screen.getAllByLabelText('Target text: Total')[0])
+    await fireEvent.click(screen.getAllByLabelText('Target text: Cost')[0], { shiftKey: true })
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: Total Cost')).toBeTruthy()
+      expect((screen.getByTestId('replace-all-text-matches-button') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    const quickReplace = screen.getByLabelText('Quick Replace Text') as HTMLTextAreaElement
+    await user.clear(quickReplace)
+    await user.type(quickReplace, 'Invoice Due')
+
+    await user.click(screen.getByTestId('replace-all-text-matches-button'))
+
+    await waitFor(() => {
+      expect(vi.mocked(pdfDocumentOperations.replaceTargetedTextInDocument)).toHaveBeenCalledTimes(3)
+    })
+
+    const calls = vi.mocked(pdfDocumentOperations.replaceTargetedTextInDocument).mock.calls
+    expect(calls.map((call) => (call[1] as { targetOccurrence: number }).targetOccurrence)).toEqual([2, 1, 0])
+    expect(calls.every((call) => (call[1] as { targetText: string }).targetText === 'Total Cost')).toBe(true)
+    expect(calls.every((call) => (call[1] as { replacementText: string }).replacementText === 'Invoice Due')).toBe(true)
   })
 
   test('nudges, resizes, and resets the selected text region', async () => {
