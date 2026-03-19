@@ -1,5 +1,57 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
 
+function formatPdfOffsetEntry(offset: number) {
+  return `${String(offset).padStart(10, '0')} 00000 n \n`
+}
+
+function buildHybridXfaIncrementalUpdate(bytes: Uint8Array) {
+  const decoder = new TextDecoder('latin1')
+  const encoder = new TextEncoder()
+  const source = decoder.decode(bytes)
+  const acroFormReferenceMatch = source.match(/\/AcroForm\s+(\d+)\s+0\s+R/)
+  const rootReferenceMatch = source.match(/\/Root\s+(\d+\s+\d+\s+R)/)
+  const infoReferenceMatch = source.match(/\/Info\s+(\d+\s+\d+\s+R)/)
+  const sizeMatch = source.match(/\/Size\s+(\d+)/)
+  const startXrefMatch = source.match(/startxref\s+(\d+)\s+%%EOF/)
+
+  if (!acroFormReferenceMatch || !rootReferenceMatch || !sizeMatch || !startXrefMatch) {
+    throw new Error('Unable to construct a hybrid XFA fixture from the base PDF bytes.')
+  }
+
+  const acroFormObjectNumber = Number.parseInt(acroFormReferenceMatch[1], 10)
+  const nextObjectNumber = Number.parseInt(sizeMatch[1], 10)
+  const acroFormPattern = new RegExp(`${acroFormObjectNumber} 0 obj\\s*<<([\\s\\S]*?)>>\\s*endobj`)
+  const acroFormMatch = source.match(acroFormPattern)
+
+  if (!acroFormMatch) {
+    throw new Error('Unable to locate the AcroForm dictionary in the base PDF bytes.')
+  }
+
+  const acroFormDictionaryBody = acroFormMatch[1].trimEnd()
+  const acroFormObject = `${acroFormObjectNumber} 0 obj\n<<\n${acroFormDictionaryBody}\n/XFA ${nextObjectNumber} 0 R\n>>\nendobj\n`
+  const xfaPacket =
+    '<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/2.8/"/></xdp:xdp>'
+  const xfaObject =
+    `${nextObjectNumber} 0 obj\n<<\n/Length ${xfaPacket.length}\n/Subtype /XML\n>>\nstream\n${xfaPacket}\nendstream\nendobj\n`
+  const separator = source.endsWith('\n') ? '' : '\n'
+  const separatorLength = encoder.encode(separator).length
+  const acroFormOffset = bytes.length + separatorLength
+  const xfaObjectOffset = acroFormOffset + encoder.encode(acroFormObject).length
+  const xrefOffset = xfaObjectOffset + encoder.encode(xfaObject).length
+  const trailer =
+    `xref\n${acroFormObjectNumber} 1\n${formatPdfOffsetEntry(acroFormOffset)}` +
+    `${nextObjectNumber} 1\n${formatPdfOffsetEntry(xfaObjectOffset)}` +
+    `trailer\n<<\n/Size ${nextObjectNumber + 1}\n/Root ${rootReferenceMatch[1]}\n` +
+    `${infoReferenceMatch ? `/Info ${infoReferenceMatch[1]}\n` : ''}` +
+    `/Prev ${startXrefMatch[1]}\n>>\nstartxref\n${xrefOffset}\n%%EOF`
+  const updateBytes = encoder.encode(`${separator}${acroFormObject}${xfaObject}${trailer}`)
+  const combined = new Uint8Array(bytes.length + updateBytes.length)
+
+  combined.set(bytes, 0)
+  combined.set(updateBytes, bytes.length)
+  return combined
+}
+
 export interface PdfAnnotationFixtureSummary {
   id: string
   subtype: string
@@ -61,6 +113,8 @@ export async function createSampleAcroFormPdf() {
     color: rgb(0.26, 0.31, 0.38),
   })
   const fullName = form.createTextField('applicant.fullName')
+  fullName.enableRequired()
+  fullName.setMaxLength(24)
   fullName.setText('Krishna Vaibhav')
   fullName.addToPage(page, {
     x: 56,
@@ -193,7 +247,12 @@ export async function createSampleAcroFormPdf() {
   document.setCreator('Sampadan Tests')
   document.setProducer('Sampadan Tests')
 
-  return new Uint8Array(await document.save())
+  return new Uint8Array(await document.save({ useObjectStreams: false }))
+}
+
+export async function createHybridXfaAcroFormPdf() {
+  const source = await createSampleAcroFormPdf()
+  return buildHybridXfaIncrementalUpdate(source)
 }
 
 export async function readPdfFormValues(bytes: Uint8Array) {

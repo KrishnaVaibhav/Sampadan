@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'vitest'
 
-import { createSampleAcroFormPdf, readPdfFormValues, readPdfSummary } from '../../test/pdf-fixtures'
+import { createHybridXfaAcroFormPdf, createSampleAcroFormPdf, readPdfFormValues, readPdfSummary } from '../../test/pdf-fixtures'
 import {
   applyFormFieldValuesToDocument,
+  convertXfaToAcroFormFallbackInDocument,
   flattenFormFieldsInDocument,
   readFormFieldsFromDocument,
 } from './pdf-forms'
@@ -30,6 +31,16 @@ async function readPdfText(bytes: Uint8Array) {
   }
 }
 
+function decodePdfBytes(bytes: Uint8Array) {
+  let value = ''
+
+  for (const byte of bytes) {
+    value += String.fromCharCode(byte)
+  }
+
+  return value
+}
+
 describe('real PDF AcroForm operations', () => {
   test('reads standard AcroForm fields from real PDF bytes', async () => {
     const source = await createSampleAcroFormPdf()
@@ -54,6 +65,7 @@ describe('real PDF AcroForm operations', () => {
     const lockedNote = fields.find((field) => field.name === 'review.lockedNote')
     expect(lockedNote?.readOnly).toBe(true)
     expect(lockedNote?.editable).toBe(false)
+    expect(fields.find((field) => field.name === 'applicant.fullName')?.required).toBe(true)
   })
 
   test('applies AcroForm values and preserves a readable PDF', async () => {
@@ -104,5 +116,39 @@ describe('real PDF AcroForm operations', () => {
 
     expect(await readFormFieldsFromDocument(flattened)).toHaveLength(0)
     expect((await readPdfSummary(flattened)).pageCount).toBe(1)
+  })
+
+  test('rejects empty values for required AcroForm fields', async () => {
+    const source = await createSampleAcroFormPdf()
+
+    await expect(
+      applyFormFieldValuesToDocument(source, [{ name: 'applicant.fullName', kind: 'text', value: '' }]),
+    ).rejects.toThrow('Required form field "fullName" cannot be empty.')
+  })
+
+  test('rejects text that exceeds the field max length', async () => {
+    const source = await createSampleAcroFormPdf()
+
+    await expect(
+      applyFormFieldValuesToDocument(source, [
+        { name: 'applicant.fullName', kind: 'text', value: 'This replacement text is intentionally too long.' },
+      ]),
+    ).rejects.toThrow('"applicant.fullName" accepts at most 24 characters.')
+  })
+
+  test('converts hybrid XFA PDFs to an editable AcroForm fallback when standard fields exist', async () => {
+    const source = await createHybridXfaAcroFormPdf()
+    expect(decodePdfBytes(source)).toContain('/XFA')
+    expect(await readFormFieldsFromDocument(source)).toEqual([])
+    await expect(
+      applyFormFieldValuesToDocument(source, [{ name: 'applicant.fullName', kind: 'text', value: 'Ada Lovelace' }]),
+    ).rejects.toThrow('XFA or hybrid forms are not editable yet. Use the AcroForm fallback conversion first.')
+
+    const converted = await convertXfaToAcroFormFallbackInDocument(source)
+    const fields = await readFormFieldsFromDocument(converted)
+
+    expect(decodePdfBytes(converted)).not.toContain('/XFA')
+    expect(fields).toHaveLength(6)
+    expect(fields.find((field) => field.name === 'applicant.fullName')?.value).toBe('Krishna Vaibhav')
   })
 })

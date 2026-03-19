@@ -10,6 +10,25 @@ async function saveDocument(document: Awaited<ReturnType<typeof loadDocument>>) 
   return document.save()
 }
 
+function containsXfaMarker(bytes: Uint8Array) {
+  const marker = '/XFA'
+  const overlap = marker.length - 1
+  const chunkSize = 64 * 1024
+  const decoder = new TextDecoder('latin1')
+
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const start = Math.max(0, offset - overlap)
+    const end = Math.min(bytes.length, offset + chunkSize)
+    const chunk = decoder.decode(bytes.subarray(start, end))
+
+    if (chunk.includes(marker)) {
+      return true
+    }
+  }
+
+  return false
+}
+
 function deriveFieldLabel(name: string) {
   const segments = name.split('.').filter(Boolean)
   return segments.at(-1) ?? name
@@ -59,6 +78,72 @@ function normalizeTextValue(value: PdfFormFieldValue) {
   return ''
 }
 
+function isEmptyFormValue(value: PdfFormFieldValue) {
+  if (Array.isArray(value)) {
+    return value.every((entry) => entry.trim().length === 0)
+  }
+
+  if (typeof value === 'string') {
+    return value.trim().length === 0
+  }
+
+  return value !== true
+}
+
+function createTextFieldNotes(field: {
+  isRichFormatted: () => boolean
+  isFileSelector: () => boolean
+  isSpellChecked: () => boolean
+  isScrollable: () => boolean
+}) {
+  const notes: string[] = []
+
+  if (field.isRichFormatted()) {
+    notes.push('Rich formatting is present. Editing will write a plain-text field value.')
+  }
+
+  if (field.isFileSelector()) {
+    notes.push('File selector semantics are present. Sampadan edits the stored value as plain text.')
+  }
+
+  if (!field.isSpellChecked()) {
+    notes.push('Spell checking is disabled by the source form.')
+  }
+
+  if (!field.isScrollable()) {
+    notes.push('Scrolling is disabled for this field. Long values may clip in some viewers.')
+  }
+
+  return notes
+}
+
+function createChoiceFieldNotes(options: {
+  isEditable?: () => boolean
+  isSorted: () => boolean
+  isSelectOnClick: () => boolean
+  isSpellChecked?: () => boolean
+}) {
+  const notes: string[] = []
+
+  if (options.isEditable?.()) {
+    notes.push('Field allows typed values beyond the listed options.')
+  }
+
+  if (options.isSorted()) {
+    notes.push('Options are marked as sorted in the source form.')
+  }
+
+  if (options.isSelectOnClick()) {
+    notes.push('Selection commits immediately on click in supporting viewers.')
+  }
+
+  if (options.isSpellChecked && !options.isSpellChecked()) {
+    notes.push('Spell checking is disabled by the source form.')
+  }
+
+  return notes
+}
+
 function createBaseFieldDescriptor(options: {
   field: {
     getName: () => string
@@ -100,28 +185,24 @@ function createBaseFieldDescriptor(options: {
 }
 
 export async function readFormFieldsFromDocument(bytes: Uint8Array): Promise<PdfFormField[]> {
+  if (containsXfaMarker(bytes)) {
+    return []
+  }
+
   const pdfLib = await getPdfLib()
   const { PDFTextField, PDFCheckBox, PDFRadioGroup, PDFDropdown, PDFOptionList, PDFSignature } = pdfLib
   const document = await loadDocument(bytes)
   const form = document.getForm()
 
-  if (form.hasXFA()) {
-    return []
-  }
-
   return form.getFields().map((field) => {
     if (field instanceof PDFTextField) {
-      const notes: string[] = []
+      const notes = createTextFieldNotes(field)
       let value = ''
 
       try {
         value = field.getText() ?? ''
       } catch {
         notes.push('Rich text value could not be read. Sampadan will treat this as plain text when saving.')
-      }
-
-      if (field.isRichFormatted()) {
-        notes.push('Rich formatting is present. Editing will write a plain-text field value.')
       }
 
       return createBaseFieldDescriptor({
@@ -164,7 +245,12 @@ export async function readFormFieldsFromDocument(bytes: Uint8Array): Promise<Pdf
         multiSelect,
         editable: !field.isReadOnly(),
         acceptsCustomText: field.isEditable(),
-        notes: field.isEditable() ? ['Field allows typed values beyond the listed options.'] : [],
+        notes: createChoiceFieldNotes({
+          isEditable: () => field.isEditable(),
+          isSorted: () => field.isSorted(),
+          isSelectOnClick: () => field.isSelectOnClick(),
+          isSpellChecked: () => field.isSpellChecked(),
+        }),
       })
     }
 
@@ -177,6 +263,10 @@ export async function readFormFieldsFromDocument(bytes: Uint8Array): Promise<Pdf
         value: multiSelect ? selections : selections[0] ?? '',
         options: field.getOptions(),
         multiSelect,
+        notes: createChoiceFieldNotes({
+          isSorted: () => field.isSorted(),
+          isSelectOnClick: () => field.isSelectOnClick(),
+        }),
       })
     }
 
@@ -209,14 +299,17 @@ export async function applyFormFieldValuesToDocument(
     flatten?: boolean
   } = {},
 ) {
+  if (containsXfaMarker(bytes)) {
+    throw new Error('XFA or hybrid forms are not editable yet. Use the AcroForm fallback conversion first.')
+  }
+
   const pdfLib = await getPdfLib()
   const { PDFTextField, PDFCheckBox, PDFRadioGroup, PDFDropdown, PDFOptionList } = pdfLib
   const document = await loadDocument(bytes)
   const form = document.getForm()
 
-  if (form.hasXFA()) {
-    throw new Error('XFA or hybrid forms are not editable yet. Use a standard AcroForm PDF for local form filling.')
-  }
+  const editableFieldDescriptors = readFormFieldsFromDocument(bytes)
+  const descriptorByName = new Map((await editableFieldDescriptors).map((field) => [field.name, field]))
 
   for (const update of updates) {
     const field = form.getFieldMaybe(update.name)
@@ -224,9 +317,20 @@ export async function applyFormFieldValuesToDocument(
       continue
     }
 
+    const descriptor = descriptorByName.get(update.name)
+    if (descriptor?.required && isEmptyFormValue(update.value)) {
+      throw new Error(`Required form field "${descriptor.label}" cannot be empty.`)
+    }
+
     try {
       if (field instanceof PDFTextField) {
-        field.setText(normalizeTextValue(update.value) || undefined)
+        const nextValue = normalizeTextValue(update.value)
+
+        if (descriptor && descriptor.maxLength !== null && nextValue.length > descriptor.maxLength) {
+          throw new Error(`"${update.name}" accepts at most ${descriptor.maxLength} characters.`)
+        }
+
+        field.setText(nextValue || undefined)
         continue
       }
 
@@ -241,6 +345,9 @@ export async function applyFormFieldValuesToDocument(
 
       if (field instanceof PDFRadioGroup) {
         const value = normalizeStringValue(update.value)
+        if (value && !field.getOptions().includes(value)) {
+          throw new Error(`Choose a valid option for "${update.name}".`)
+        }
         if (value) {
           field.select(value)
         } else {
@@ -251,6 +358,12 @@ export async function applyFormFieldValuesToDocument(
 
       if (field instanceof PDFDropdown) {
         const selections = normalizeStringArrayValue(update.value)
+        if (!field.isEditable()) {
+          const invalidSelection = selections.find((selection) => !field.getOptions().includes(selection))
+          if (invalidSelection) {
+            throw new Error(`"${invalidSelection}" is not one of the available options for "${update.name}".`)
+          }
+        }
         if (selections.length === 0) {
           field.clear()
         } else {
@@ -261,6 +374,10 @@ export async function applyFormFieldValuesToDocument(
 
       if (field instanceof PDFOptionList) {
         const selections = normalizeStringArrayValue(update.value)
+        const invalidSelection = selections.find((selection) => !field.getOptions().includes(selection))
+        if (invalidSelection) {
+          throw new Error(`"${invalidSelection}" is not one of the available options for "${update.name}".`)
+        }
         if (selections.length === 0) {
           field.clear()
         } else {
@@ -272,6 +389,8 @@ export async function applyFormFieldValuesToDocument(
       throw new Error(`Failed to apply form field "${update.name}": ${detail}`)
     }
   }
+
+  form.updateFieldAppearances()
 
   if (options.flatten) {
     if (form.getFields().length === 0) {
@@ -285,17 +404,35 @@ export async function applyFormFieldValuesToDocument(
 }
 
 export async function flattenFormFieldsInDocument(bytes: Uint8Array) {
+  if (containsXfaMarker(bytes)) {
+    throw new Error('XFA or hybrid forms are not editable yet. Use the AcroForm fallback conversion first.')
+  }
+
   const document = await loadDocument(bytes)
   const form = document.getForm()
-
-  if (form.hasXFA()) {
-    throw new Error('XFA or hybrid forms are not editable yet. Use a standard AcroForm PDF for local flattening.')
-  }
 
   if (form.getFields().length === 0) {
     throw new Error('No standard AcroForm fields are available to flatten.')
   }
 
   form.flatten()
+  return saveDocument(document)
+}
+
+export async function convertXfaToAcroFormFallbackInDocument(bytes: Uint8Array) {
+  const hadRawXfa = containsXfaMarker(bytes)
+
+  if (!hadRawXfa) {
+    throw new Error('This PDF does not contain an XFA form package.')
+  }
+
+  const document = await loadDocument(bytes)
+  const form = document.getForm()
+
+  if (form.getFields().length === 0) {
+    throw new Error('No standard AcroForm fallback fields were found after removing the XFA package.')
+  }
+
+  form.updateFieldAppearances()
   return saveDocument(document)
 }

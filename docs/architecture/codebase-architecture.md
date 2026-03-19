@@ -169,9 +169,10 @@ Planned split:
 
 1. Frontend reads standard AcroForm fields through the local PDF mutation layer.
 2. The rail exposes compact field editors for text, checkbox, radio, dropdown, and option-list values.
-3. Applying changes writes the new field values into the PDF bytes locally through `pdf-lib`.
-4. Optional flattening converts the current widget appearances into page content and removes interactive fields.
-5. XFA and hybrid form packages remain inspect-only until a dedicated subsystem exists for them.
+3. Raw-byte XFA detection runs before `pdf-lib` form access so hybrid or XFA packages do not silently downgrade into editable AcroForm state.
+4. Applying changes writes validated field values into the PDF bytes locally through `pdf-lib`, including required-field and max-length enforcement plus option validation for choice fields.
+5. Optional flattening converts the current widget appearances into page content and removes interactive fields.
+6. When a PDF is hybrid XFA plus AcroForm, the UI offers an explicit local fallback-conversion step that removes the XFA package and keeps the standard AcroForm widgets.
 
 ### Save Document
 
@@ -244,7 +245,7 @@ These are the modules the codebase should grow into instead of adding more logic
 - `src/lib/operations/pdf-annotations.ts`
   true sticky-note and text-markup PDF annotation writes plus current-page annotation editing and removal
 - `src/lib/operations/pdf-forms.ts`
-  standard AcroForm field discovery, field-value application, and form flattening
+  standard AcroForm field discovery, validation-aware field-value application, hybrid-XFA detection, fallback conversion, and form flattening
 - `src/lib/types.ts`
   shared desktop payloads for trust, forms, OCR, qpdf runtime state, and protected-copy options
 - `src/lib/ocr/ocr-client.ts`
@@ -254,13 +255,13 @@ These are the modules the codebase should grow into instead of adding more logic
 - `src/App.workflow.test.ts`
   real-PDF workflow regression for open, encrypted unlock, mutate, form fill/flatten, metadata, save, merge, and export paths
 - `src/test/pdf-fixtures.ts`
-  generated real-PDF fixtures, including fillable AcroForm samples and annotation summary helpers used by regression tests
+  generated real-PDF fixtures, including fillable AcroForm samples, hybrid XFA-plus-AcroForm fixtures, and annotation summary helpers used by regression tests
 - `src/lib/operations/pdf-document.test.ts`
   real-byte coverage for structural edits and metadata round-trips
 - `src/lib/operations/pdf-annotations.test.ts`
   real-byte coverage for sticky-note and text-markup PDF annotations
 - `src/lib/operations/pdf-forms.test.ts`
-  real-byte coverage for standard AcroForm field discovery, fill, and flatten flows
+  real-byte coverage for standard AcroForm field discovery, validation, fill, flatten, and hybrid-XFA fallback flows
 - `src/lib/conversion/`
   PNG export, image pipelines, later DOCX/HTML export adapters
 - `src/lib/components/`
@@ -343,7 +344,7 @@ Status on March 18, 2026:
 - full-document OCR preview implemented
 - OCR runtime detection and language listing implemented
 - searchable OCR PDF copy generation implemented
-- standard AcroForm discovery, local field filling, and flattening implemented for text, checkbox, radio, dropdown, and option-list fields
+- standard AcroForm discovery, validation-aware local field filling, flattening, and hybrid-XFA fallback conversion implemented for text, checkbox, radio, dropdown, and option-list fields
 - native signature/trust report inspection implemented
 - native attachment inspection implemented
 - embedded attachment insertion implemented through the frontend PDF mutation layer

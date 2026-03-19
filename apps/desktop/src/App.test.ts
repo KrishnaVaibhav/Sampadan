@@ -237,6 +237,7 @@ vi.mock('./lib/operations/pdf-forms', () => ({
     },
   ]),
   applyFormFieldValuesToDocument: vi.fn(async () => Uint8Array.from([8, 8, 8, 8])),
+  convertXfaToAcroFormFallbackInDocument: vi.fn(async () => Uint8Array.from([8, 8, 8, 7])),
   flattenFormFieldsInDocument: vi.fn(async () => Uint8Array.from([8, 8, 8, 9])),
 }))
 
@@ -248,6 +249,7 @@ vi.mock('./lib/session/recent-files', () => ({
 import App from './App.svelte'
 import * as annotationOperations from './lib/operations/pdf-annotations'
 import * as pdfDocumentOperations from './lib/operations/pdf-document'
+import * as pdfFormOperations from './lib/operations/pdf-forms'
 import * as viewerModule from './lib/viewer/pdf-viewer'
 
 function buildDefaultTextTargetSpans(pageNumber: number) {
@@ -520,6 +522,7 @@ beforeEach(() => {
   vi.mocked(annotationOperations.removeAnnotationFromDocument).mockClear()
   vi.mocked(annotationOperations.updateAnnotationInDocument).mockClear()
   vi.mocked(pdfDocumentOperations.replaceTargetedTextInDocument).mockClear()
+  vi.mocked(pdfFormOperations.convertXfaToAcroFormFallbackInDocument).mockClear()
   vi.mocked(viewerModule.extractPageTextSpans).mockReset()
   vi.mocked(viewerModule.extractPageTextSpans).mockImplementation(async (_pdfProxy, pageNumber: number) =>
     buildDefaultTextTargetSpans(pageNumber),
@@ -1805,6 +1808,77 @@ describe('Sampadan desktop app regression suite', () => {
     })
 
     expectCamelCasePayloadKeys(getInvokePayloads('inspect_pdf_bytes'), ['fileName', 'bytesBase64'])
+  })
+
+  test('offers an AcroForm fallback conversion path for XFA PDFs', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/xfa.pdf')
+    invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      switch (command) {
+        case 'get_ocr_status':
+          return {
+            available: true,
+            binaryPath: 'C:/Program Files/Tesseract-OCR/tesseract.exe',
+            version: 'tesseract v5.5.0',
+            languages: ['eng', 'osd'],
+            recommendedLanguage: 'eng',
+            missingReason: null,
+          }
+        case 'get_qpdf_status':
+          return {
+            available: true,
+            binaryPath: 'C:/Program Files/qpdf 12.3.2/bin/qpdf.exe',
+            version: 'qpdf version 12.3.2',
+            missingReason: null,
+          }
+        case 'load_pdf':
+          return createPayload('xfa.pdf', 'C:/docs/xfa.pdf', {
+            flags: {
+              encrypted: false,
+              signed: false,
+              hasForms: true,
+              hasXfa: true,
+              hasJavascript: false,
+              hasAttachments: false,
+              tagged: false,
+              linearized: false,
+              likelyScanned: false,
+              mixedContent: false,
+            },
+          })
+        case 'inspect_pdf_bytes':
+          return createPayload((args?.fileName as string | undefined) ?? 'xfa.pdf', null, {
+            flags: {
+              encrypted: false,
+              signed: false,
+              hasForms: true,
+              hasXfa: false,
+              hasJavascript: false,
+              hasAttachments: false,
+              tagged: false,
+              linearized: false,
+              likelyScanned: false,
+              mixedContent: false,
+            },
+          })
+        default:
+          return null
+      }
+    })
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect(screen.getByTestId('convert-xfa-fallback-button')).toBeTruthy()
+    })
+
+    await user.click(screen.getByTestId('convert-xfa-fallback-button'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Removed XFA package and exposed AcroForm fallback')).toBeTruthy()
+      expect(pdfFormOperations.convertXfaToAcroFormFallbackInDocument).toHaveBeenCalledWith(expect.any(Uint8Array))
+    })
   })
 
   test('exports a protected copy through the local qpdf pipeline', async () => {

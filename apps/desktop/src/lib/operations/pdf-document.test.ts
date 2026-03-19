@@ -618,6 +618,8 @@ describe('real PDF document operations', () => {
 
       const left = Math.min(...replacementSpans.map((span) => span.xPercent))
       const top = Math.min(...replacementSpans.map((span) => span.yPercent))
+      const averageFontSize =
+        replacementSpans.reduce((total, span) => total + span.fontSize, 0) / replacementSpans.length
       const firstLineSpans = replacementSpans.filter((span) => Math.abs(span.yPercent - top) <= 1.5)
       expect(firstLineSpans.length).toBeGreaterThanOrEqual(2)
       const firstLineGap = firstLineSpans[1].xPercent - (firstLineSpans[0].xPercent + firstLineSpans[0].widthPercent)
@@ -627,6 +629,8 @@ describe('real PDF document operations', () => {
       expect(top).toBeGreaterThanOrEqual(9)
       expect(top).toBeLessThan(12.5)
       expect(firstLineGap).toBeLessThan(2.6)
+      expect(averageFontSize).toBeGreaterThanOrEqual(12.5)
+      expect(averageFontSize).toBeLessThanOrEqual(15.5)
     } finally {
       await proxy.destroy()
     }

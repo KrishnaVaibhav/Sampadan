@@ -13,6 +13,7 @@
   import { type PdfProxy, loadPdfProxy } from './lib/pdf-engine'
   import {
     applyFormFieldValuesToDocument,
+    convertXfaToAcroFormFallbackInDocument,
     flattenFormFieldsInDocument,
     readFormFieldsFromDocument,
   } from './lib/operations/pdf-forms'
@@ -1611,6 +1612,19 @@
       errorStatus: 'Failed to flatten the form fields',
       nextCurrentPage: currentPage,
       mutate: () => flattenFormFieldsInDocument(currentWorkspace.bytes),
+    })
+  }
+
+  async function convertXfaToAcroFormFallback() {
+    if (!workspace || busy || !workspace.flags.hasXfa) return
+    const currentWorkspace = workspace
+
+    await runDocumentMutation({
+      workingStatus: 'Removing XFA package and exposing AcroForm fallback',
+      successStatus: 'Removed XFA package and exposed AcroForm fallback',
+      errorStatus: 'Failed to expose an AcroForm fallback',
+      nextCurrentPage: currentPage,
+      mutate: () => convertXfaToAcroFormFallbackInDocument(currentWorkspace.bytes),
     })
   }
 
@@ -4296,6 +4310,13 @@
             <span class="muted">
               This PDF uses XFA or a hybrid form package. Sampadan keeps those forms inspect-only for now.
             </span>
+            {#if workspace.flags.hasForms}
+              <button on:click={convertXfaToAcroFormFallback} disabled={busy} data-testid="convert-xfa-fallback-button">
+                Try AcroForm Fallback
+              </button>
+            {:else}
+              <span class="muted">No standard AcroForm fallback fields were detected in this document.</span>
+            {/if}
           </div>
         {:else if workspace?.flags.hasForms}
           <div class="section-head compact-head">
@@ -4356,8 +4377,11 @@
                       <span class="field-label">Form: {field.label}</span>
                       <input
                         class="field-input"
+                        type="text"
                         value={getSingleFormFieldDraftValue(field)}
                         list={getFormFieldOptionsListId(field.name)}
+                        maxlength={field.maxLength ?? undefined}
+                        required={field.required}
                         disabled={busy || !field.editable}
                         on:input={(event) => updateTextFormFieldDraft(field, event.currentTarget.value)}
                       />
@@ -4390,13 +4414,18 @@
                       <textarea
                         class="field-input note-body"
                         value={getSingleFormFieldDraftValue(field)}
+                        maxlength={field.maxLength ?? undefined}
+                        required={field.required}
                         disabled={busy || !field.editable}
                         on:input={(event) => updateTextFormFieldDraft(field, event.currentTarget.value)}
                       ></textarea>
                     {:else}
                       <input
                         class="field-input"
+                        type={field.password ? 'password' : 'text'}
                         value={getSingleFormFieldDraftValue(field)}
+                        maxlength={field.maxLength ?? undefined}
+                        required={field.required}
                         disabled={busy || !field.editable}
                         on:input={(event) => updateTextFormFieldDraft(field, event.currentTarget.value)}
                       />

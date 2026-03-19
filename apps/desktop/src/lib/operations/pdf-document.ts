@@ -224,6 +224,25 @@ function resolveTextHeightAtSize(font: LayoutFontMetrics, size: number) {
   return typeof font.heightAtSize === 'function' ? font.heightAtSize(size, { descender: false }) : size
 }
 
+function resolveFontSizeForTargetTextHeight(
+  font: LayoutFontMetrics,
+  targetTextHeight: number,
+  fallbackSize: number,
+) {
+  const normalizedTargetHeight = Math.max(1, targetTextHeight)
+  const heightAtOnePoint = resolveTextHeightAtSize(font, 1)
+
+  if (heightAtOnePoint > 0) {
+    return normalizedTargetHeight / heightAtOnePoint
+  }
+
+  if (typeof font.sizeAtHeight === 'function') {
+    return font.sizeAtHeight(normalizedTargetHeight)
+  }
+
+  return fallbackSize
+}
+
 function resolveClosestStandardFontName(fontFamilyHint?: string | null) {
   const normalizedHint = (fontFamilyHint ?? '').toLowerCase()
   const wantsMonospace =
@@ -1439,10 +1458,20 @@ export async function replaceRegionWithTextInDocument(
     const contentY = rect.y + padding.vertical
     const contentWidth = Math.max(24, rect.width - padding.horizontal * 2)
     const contentHeight = Math.max(12, rect.height - padding.vertical * 2)
+    const heightMatchedFontSize = clampNumber(
+      resolveFontSizeForTargetTextHeight(
+        font,
+        Math.max(6, useBaselineAnchoring ? rect.height - Math.max(0.4, whiteoutBleed) : contentHeight),
+        baseFontSize,
+      ),
+      8,
+      72,
+    )
+    const requestedFontSize = useBaselineAnchoring ? heightMatchedFontSize : baseFontSize
     const { fontSize, lines, lineHeight, textHeight } = resolveFittedTextLayout({
       text,
       font,
-      requestedSize: baseFontSize,
+      requestedSize: requestedFontSize,
       maxTextWidth: contentWidth,
       maxTextHeight: contentHeight,
       autoFit: options.autoFit ?? false,
