@@ -1458,12 +1458,10 @@ export async function replaceRegionWithTextInDocument(
     const contentY = rect.y + padding.vertical
     const contentWidth = Math.max(24, rect.width - padding.horizontal * 2)
     const contentHeight = Math.max(12, rect.height - padding.vertical * 2)
-    const targetTextHeight = Math.max(6, resolveTextHeightAtSize(font, baseFontSize))
-    const heightMatchedFontSize = clampNumber(
-      resolveFontSizeForTargetTextHeight(font, targetTextHeight, baseFontSize),
-      8,
-      72,
-    )
+    const textHeightAtBase = Math.max(1, resolveTextHeightAtSize(font, baseFontSize))
+    const estimatedHeight = Math.max(6, rect.height - padding.vertical * 2)
+    const scaledFontSize = baseFontSize * (estimatedHeight / textHeightAtBase)
+    const heightMatchedFontSize = clampNumber(scaledFontSize, 8, 72)
     const requestedFontSize = useBaselineAnchoring ? heightMatchedFontSize : baseFontSize
     const { fontSize, lines, lineHeight, textHeight } = resolveFittedTextLayout({
       text,
