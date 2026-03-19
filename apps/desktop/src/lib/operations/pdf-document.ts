@@ -1425,13 +1425,13 @@ export async function replaceRegionWithTextInDocument(
     })
     const useBaselineAnchoring = compactLayout && typeof options.baselinePercent === 'number'
     const padding = useBaselineAnchoring
-      ? {
-          horizontal: 0,
-          vertical: 0,
+      ? { horizontal: 0, vertical: 0 }
+      : {
+          horizontal: Math.min(4, rect.width * 0.03),
+          vertical: Math.min(2, rect.height * 0.03),
         }
-      : resolveEditPadding(rect, baseFontSize, compactLayout)
     const whiteoutBleed = compactLayout
-      ? clampNumber(Math.min(baseFontSize * 0.16, Math.min(rect.width, rect.height) * 0.05), 0.6, 2.2)
+      ? clampNumber(Math.min(baseFontSize * 0.12, Math.min(rect.width, rect.height) * 0.03), 0.4, 1.2)
       : 0
 
     page.drawRectangle({
@@ -1459,9 +1459,9 @@ export async function replaceRegionWithTextInDocument(
     const contentWidth = Math.max(24, rect.width - padding.horizontal * 2)
     const contentHeight = Math.max(12, rect.height - padding.vertical * 2)
     const textHeightAtBase = Math.max(1, resolveTextHeightAtSize(font, baseFontSize))
-    const estimatedHeight = Math.max(6, rect.height - padding.vertical * 2)
-    const scaledFontSize = baseFontSize * (estimatedHeight / textHeightAtBase)
-    const heightMatchedFontSize = clampNumber(scaledFontSize, 8, 72)
+    const regionHeight = Math.max(6, rect.height - padding.vertical * 2)
+    const heightScale = Math.min(1, regionHeight / textHeightAtBase)
+    const heightMatchedFontSize = clampNumber(baseFontSize * heightScale, 8, 72)
     const requestedFontSize = useBaselineAnchoring ? heightMatchedFontSize : baseFontSize
     const { fontSize, lines, lineHeight, textHeight } = resolveFittedTextLayout({
       text,
