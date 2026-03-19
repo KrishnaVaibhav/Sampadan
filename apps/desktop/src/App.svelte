@@ -1827,18 +1827,31 @@
     lastError = null
 
     try {
+      const huggingRegion = selectedTextSpan
+        ? {
+            xPercent: selectedTextSpan.xPercent,
+            yPercent: selectedTextSpan.yPercent,
+            widthPercent: selectedTextSpan.widthPercent,
+            heightPercent: selectedTextSpan.heightPercent,
+            fontSize: selectedTextSpan.fontSize,
+            fontFamily: targetRegion.fontFamily ?? selectedTextSpan.fontFamily ?? null,
+            baselinePercent: targetRegion.baselinePercent ?? selectedTextSpan.baselinePercent ?? null,
+          }
+        : targetRegion
+
       const result = await replaceTargetedTextInDocument(currentWorkspace.bytes, {
         targetText: selectedTextSpan.text,
         replacementText,
         pageIndex: currentPage - 1,
         targetOccurrence: selectedTextOccurrence,
-        xPercent: targetRegion.xPercent,
-        yPercent: targetRegion.yPercent,
-        widthPercent: targetRegion.widthPercent,
-        heightPercent: targetRegion.heightPercent,
-        fontSize: targetRegion.fontSize,
-        fontFamily: targetRegion.fontFamily ?? selectedTextSpan.fontFamily ?? null,
-        baselinePercent: targetRegion.baselinePercent ?? selectedTextSpan.baselinePercent ?? null,
+        xPercent: huggingRegion.xPercent,
+        yPercent: huggingRegion.yPercent,
+        widthPercent: huggingRegion.widthPercent,
+        heightPercent: huggingRegion.heightPercent,
+        fontSize: huggingRegion.fontSize,
+        fontFamily: huggingRegion.fontFamily,
+        baselinePercent: huggingRegion.baselinePercent,
+        forceMinimumDimensions: false,
         alignment: textEditAlignment,
       })
 
@@ -1913,9 +1926,10 @@
           widthPercent: matchTarget.widthPercent,
           heightPercent: matchTarget.heightPercent,
           fontSize: matchTarget.fontSize,
-          fontFamily: matchTarget.fontFamily ?? null,
-          baselinePercent: matchTarget.baselinePercent ?? null,
-          alignment: textEditAlignment,
+        fontFamily: matchTarget.fontFamily ?? null,
+        baselinePercent: matchTarget.baselinePercent ?? null,
+        alignment: textEditAlignment,
+        forceMinimumDimensions: false,
         })
 
         workingBytes = result.bytes

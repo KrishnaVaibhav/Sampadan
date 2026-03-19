@@ -177,18 +177,32 @@ function resolvePageNumberPosition(options: {
   }
 }
 
-function resolveRelativeEditRect(options: {
-  pageWidth: number
-  pageHeight: number
-  xPercent: number
-  yPercent: number
-  widthPercent: number
-  heightPercent: number
-}) {
-  const width = clampNumber(options.pageWidth * (options.widthPercent / 100), 48, options.pageWidth)
-  const height = clampNumber(options.pageHeight * (options.heightPercent / 100), 28, options.pageHeight)
-  const topX = clampNumber(options.pageWidth * (options.xPercent / 100), 0, Math.max(0, options.pageWidth - width))
-  const topY = clampNumber(options.pageHeight * (options.yPercent / 100), 0, Math.max(0, options.pageHeight - height))
+function resolveRelativeEditRect(
+  options: {
+    pageWidth: number
+    pageHeight: number
+    xPercent: number
+    yPercent: number
+    widthPercent: number
+    heightPercent: number
+    forceMinimumDimensions?: boolean
+  },
+  enforceMinimums = true,
+) {
+  const minWidth = enforceMinimums ? 48 : 0
+  const minHeight = enforceMinimums ? 28 : 0
+  const width = clampNumber(options.pageWidth * (options.widthPercent / 100), minWidth, options.pageWidth)
+  const height = clampNumber(options.pageHeight * (options.heightPercent / 100), minHeight, options.pageHeight)
+  const topX = clampNumber(
+    options.pageWidth * (options.xPercent / 100),
+    0,
+    Math.max(0, options.pageWidth - width),
+  )
+  const topY = clampNumber(
+    options.pageHeight * (options.yPercent / 100),
+    0,
+    Math.max(0, options.pageHeight - height),
+  )
 
   return {
     x: topX,
@@ -1336,14 +1350,18 @@ export async function addFreeTextBlockToDocument(
   for (const pageIndex of pageIndexes) {
     const page = document.getPage(pageIndex)
     const { width, height } = page.getSize()
-    const rect = resolveRelativeEditRect({
-      pageWidth: width,
-      pageHeight: height,
-      xPercent: options.xPercent,
-      yPercent: options.yPercent,
-      widthPercent: options.widthPercent,
-      heightPercent: options.heightPercent,
-    })
+    const enforceMinimums = options.forceMinimumDimensions ?? true
+    const rect = resolveRelativeEditRect(
+      {
+        pageWidth: width,
+        pageHeight: height,
+        xPercent: options.xPercent,
+        yPercent: options.yPercent,
+        widthPercent: options.widthPercent,
+        heightPercent: options.heightPercent,
+      },
+      enforceMinimums,
+    )
     const padding = clampNumber(Math.min(rect.width, rect.height) * 0.08, 8, 16)
     const maxTextWidth = Math.max(36, rect.width - padding * 2)
     const lineHeight = fontSize * 1.24
