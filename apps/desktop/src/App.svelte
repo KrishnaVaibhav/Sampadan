@@ -217,6 +217,23 @@
     endIndex: number
   }
 
+  type TextSearchScope = 'page' | 'document'
+
+  type DocumentTextSearchResult = {
+    id: string
+    pageNumber: number
+    pageIndex: number
+    startIndex: number
+    endIndex: number
+    occurrenceIndex: number
+    text: string
+    xPercent: number
+    yPercent: number
+    widthPercent: number
+    heightPercent: number
+    fontSize: number
+  }
+
   type SelectedTextTarget = PdfPageTextSpan & {
     spanIds: string[]
   }
@@ -258,9 +275,17 @@
   let textTargetMode = false
   let inlineTextEditorOpen = false
   let inlineTextEditor: HTMLTextAreaElement | null = null
+  let textSearchInput: HTMLInputElement | null = null
   let textTargetDragSession: TextTargetDragSession | null = null
   let textTargetGripDragSession: TextTargetGripDragSession | null = null
   let textTargetSweepSession: TextTargetSweepSession | null = null
+  let textSearchQuery = ''
+  let textSearchReplacement = ''
+  let textSearchScope: TextSearchScope = 'page'
+  let textSearchCaseSensitive = false
+  let textSearchBusy = false
+  let textSearchResults: DocumentTextSearchResult[] = []
+  let activeTextSearchResultIndex = -1
   let rangeExpression = '1'
   let metadataDraft = emptyMetadata()
   let metadataDirty = false
@@ -310,6 +335,11 @@
   $: selectedTextSpan = buildSelectedTextTarget(selectedTextSpans)
   $: selectedTextStartSpan = selectedTextSpans[0] ?? null
   $: selectedTextEndSpan = selectedTextSpans.at(-1) ?? null
+  $: activeTextSearchResult =
+    activeTextSearchResultIndex >= 0 && activeTextSearchResultIndex < textSearchResults.length
+      ? textSearchResults[activeTextSearchResultIndex]
+      : null
+  $: currentPageTextSearchResults = textSearchResults.filter((result) => result.pageNumber === currentPage)
   $: if (selectedTextAnchorId && !currentPageTextSpans.some((span) => span.id === selectedTextAnchorId)) {
     selectedTextAnchorId = null
   }
@@ -350,6 +380,12 @@
       const modifier = event.ctrlKey || event.metaKey
       const textInputTarget = isTextInputTarget(event.target)
 
+      if (textTargetMode && workspace && modifier && event.key.toLowerCase() === 'f') {
+        event.preventDefault()
+        void focusTextSearchField()
+        return
+      }
+
       if (textTargetMode && inlineTextEditorOpen && selectedTextSpan && event.key === 'Escape') {
         event.preventDefault()
         clearSelectedTextTarget()
@@ -365,6 +401,12 @@
       if (textTargetMode && selectedTextSpan && !textInputTarget && modifier && event.shiftKey && event.key.toLowerCase() === 'r') {
         event.preventDefault()
         void replaceAllSelectedTextMatches()
+        return
+      }
+
+      if (textTargetMode && textSearchResults.length > 0 && !textInputTarget && event.key === 'F3') {
+        event.preventDefault()
+        void jumpToTextSearchResult(event.shiftKey ? -1 : 1)
         return
       }
 
@@ -2097,6 +2139,7 @@
     selectedAnnotationId = null
     selectedTextSpanIds = []
     selectedTextAnchorId = null
+    clearTextSearchState({ clearQuery: true, clearReplacement: true })
     renderedPageWidth = 0
     renderedPageHeight = 0
     metadataDraft = emptyMetadata()
@@ -2129,6 +2172,7 @@
     selectedAnnotationId = null
     selectedTextSpanIds = []
     selectedTextAnchorId = null
+    clearTextSearchState({ clearQuery: true, clearReplacement: true })
     renderedPageWidth = 0
     renderedPageHeight = 0
     metadataDraft = emptyMetadata()
@@ -2773,6 +2817,405 @@
       .trim()
   }
 
+  function clearTextSearchState(options: { clearQuery?: boolean; clearReplacement?: boolean } = {}) {
+    textSearchBusy = false
+    textSearchResults = []
+    activeTextSearchResultIndex = -1
+
+    if (options.clearQuery ?? false) {
+      textSearchQuery = ''
+    }
+
+    if (options.clearReplacement ?? false) {
+      textSearchReplacement = ''
+    }
+  }
+
+  function normalizeTextSearchValue(value: string, caseSensitive = false) {
+    const normalized = value.replace(/\s+/g, ' ').trim()
+    return caseSensitive ? normalized : normalized.toLowerCase()
+  }
+
+  function resolveTextSearchOccurrences(
+    spans: PdfPageTextSpan[],
+    query: string,
+    caseSensitive: boolean,
+  ) {
+    const normalizedQuery = normalizeTextSearchValue(query, caseSensitive)
+    if (!normalizedQuery) {
+      return []
+    }
+
+    const normalizedSpanTexts = spans.map((span) => normalizeTextSearchValue(span.text, caseSensitive))
+    const matches: TextTargetOccurrenceMatch[] = []
+
+    for (let startIndex = 0; startIndex < spans.length; startIndex += 1) {
+      const firstSegment = normalizedSpanTexts[startIndex]
+      if (!firstSegment || !normalizedQuery.startsWith(firstSegment)) {
+        continue
+      }
+
+      const parts: string[] = []
+      for (let endIndex = startIndex; endIndex < spans.length; endIndex += 1) {
+        const segment = normalizedSpanTexts[endIndex]
+        if (!segment) {
+          break
+        }
+
+        parts.push(segment)
+        const candidate = parts.join(' ')
+        if (candidate === normalizedQuery) {
+          matches.push({
+            occurrenceIndex: matches.length,
+            startIndex,
+            endIndex,
+          })
+          break
+        }
+
+        if (candidate.length >= normalizedQuery.length || !normalizedQuery.startsWith(candidate)) {
+          break
+        }
+      }
+    }
+
+    return matches
+  }
+
+  async function resolveTextSearchPageSpans(pageNumber: number) {
+    if (!pdfProxy) {
+      return []
+    }
+
+    if (pageNumber === currentPage && currentPageTextSpans.length > 0) {
+      return currentPageTextSpans
+    }
+
+    return extractPageTextSpans(pdfProxy, pageNumber, zoom)
+  }
+
+  function buildDocumentTextSearchResult(
+    pageNumber: number,
+    match: TextTargetOccurrenceMatch,
+    spans: PdfPageTextSpan[],
+  ) {
+    const matchTarget = buildSelectedTextTarget(spans.slice(match.startIndex, match.endIndex + 1))
+    if (!matchTarget) {
+      return null
+    }
+
+    return {
+      id: `search-${pageNumber}-${match.occurrenceIndex}-${match.startIndex}-${match.endIndex}`,
+      pageNumber,
+      pageIndex: pageNumber - 1,
+      startIndex: match.startIndex,
+      endIndex: match.endIndex,
+      occurrenceIndex: match.occurrenceIndex,
+      text: matchTarget.text,
+      xPercent: matchTarget.xPercent,
+      yPercent: matchTarget.yPercent,
+      widthPercent: matchTarget.widthPercent,
+      heightPercent: matchTarget.heightPercent,
+      fontSize: matchTarget.fontSize,
+    } satisfies DocumentTextSearchResult
+  }
+
+  function resolvePreferredTextSearchResultIndex(
+    results: DocumentTextSearchResult[],
+    previousActiveId: string | null,
+  ) {
+    if (results.length === 0) {
+      return -1
+    }
+
+    if (previousActiveId) {
+      const previousIndex = results.findIndex((result) => result.id === previousActiveId)
+      if (previousIndex >= 0) {
+        return previousIndex
+      }
+    }
+
+    const currentPageIndex = results.findIndex((result) => result.pageNumber === currentPage)
+    if (currentPageIndex >= 0) {
+      return currentPageIndex
+    }
+
+    return 0
+  }
+
+  async function focusTextSearchField() {
+    if (!workspace) {
+      return
+    }
+
+    textTargetMode = true
+    await tick()
+    textSearchInput?.focus()
+    textSearchInput?.select()
+  }
+
+  async function activateTextSearchResult(index: number, options: { focusEditor?: boolean } = {}) {
+    if (!workspace || !pdfProxy || index < 0 || index >= textSearchResults.length) {
+      return
+    }
+
+    const result = textSearchResults[index]
+    textTargetMode = true
+
+    if (currentPage !== result.pageNumber) {
+      await goToPage(result.pageNumber)
+    }
+
+    const spans = await extractPageTextSpans(pdfProxy, result.pageNumber, zoom)
+    if (currentPage !== result.pageNumber) {
+      return
+    }
+
+    currentPageTextSpans = spans
+    if (result.endIndex >= spans.length) {
+      await runTextSearch({ preserveActive: false, focusActive: false })
+      return
+    }
+
+    activeTextSearchResultIndex = index
+    await applySelectedTextRange(result.startIndex, result.endIndex, {
+      focusEditor: options.focusEditor ?? false,
+    })
+  }
+
+  async function jumpToTextSearchResult(direction: -1 | 1) {
+    if (textSearchResults.length === 0) {
+      return
+    }
+
+    const baseIndex = activeTextSearchResultIndex >= 0 ? activeTextSearchResultIndex : direction > 0 ? -1 : 0
+    const nextIndex = (baseIndex + direction + textSearchResults.length) % textSearchResults.length
+    await activateTextSearchResult(nextIndex, { focusEditor: false })
+  }
+
+  async function runTextSearch(options: { preserveActive?: boolean; focusActive?: boolean } = {}) {
+    if (!workspace || !pdfProxy || textSearchBusy) {
+      return
+    }
+
+    const normalizedQuery = normalizeTextSearchValue(textSearchQuery, textSearchCaseSensitive)
+    if (!normalizedQuery) {
+      clearTextSearchState()
+      statusTone = 'idle'
+      status = 'Cleared text search results'
+      return
+    }
+
+    const previousActiveId = options.preserveActive === false ? null : activeTextSearchResult?.id ?? null
+    const pageNumbers =
+      textSearchScope === 'document'
+        ? Array.from({ length: workspace.pageCount }, (_, index) => index + 1)
+        : [currentPage]
+
+    textSearchBusy = true
+    statusTone = 'busy'
+    status =
+      textSearchScope === 'document'
+        ? `Searching ${workspace.pageCount} pages for exact text`
+        : `Searching page ${currentPage} for exact text`
+    lastError = null
+
+    try {
+      const results: DocumentTextSearchResult[] = []
+
+      for (const pageNumber of pageNumbers) {
+        const spans = await resolveTextSearchPageSpans(pageNumber)
+        const matches = resolveTextSearchOccurrences(spans, textSearchQuery, textSearchCaseSensitive)
+        for (const match of matches) {
+          const result = buildDocumentTextSearchResult(pageNumber, match, spans)
+          if (result) {
+            results.push(result)
+          }
+        }
+      }
+
+      textSearchResults = results
+      activeTextSearchResultIndex = resolvePreferredTextSearchResultIndex(results, previousActiveId)
+
+      if (results.length === 0) {
+        statusTone = 'idle'
+        status = 'No exact text matches found'
+        return
+      }
+
+      statusTone = 'idle'
+      status =
+        textSearchScope === 'document'
+          ? `Found ${results.length} exact text result${results.length === 1 ? '' : 's'} across the document`
+          : `Found ${results.length} exact text result${results.length === 1 ? '' : 's'} on page ${currentPage}`
+
+      if ((options.focusActive ?? true) && activeTextSearchResultIndex >= 0) {
+        await activateTextSearchResult(activeTextSearchResultIndex, { focusEditor: false })
+      }
+    } catch (error) {
+      reportError(error, 'Failed to search PDF text')
+    } finally {
+      textSearchBusy = false
+    }
+  }
+
+  async function replaceActiveTextSearchResult() {
+    if (!workspace || busy || textSearchBusy || activeTextSearchResultIndex < 0) {
+      return
+    }
+
+    const replacementText = textSearchReplacement.trim()
+    if (!replacementText) {
+      reportError(new Error('Enter replacement text before replacing search results.'), 'Replacement text is required')
+      return
+    }
+
+    await activateTextSearchResult(activeTextSearchResultIndex, { focusEditor: false })
+    if (!selectedTextSpan) {
+      reportError(new Error('Select an active search result before replacing it.'), 'No active search result selected')
+      return
+    }
+
+    const currentWorkspace = workspace
+    const currentResult = textSearchResults[activeTextSearchResultIndex]
+    const targetRegion = resolveSelectedTextTargetRegion()
+    if (!currentResult || !targetRegion) {
+      return
+    }
+
+    busy = true
+    statusTone = 'busy'
+    status = `Replacing search result on page ${currentResult.pageNumber}`
+    lastError = null
+
+    try {
+      const result = await replaceTargetedTextInDocument(currentWorkspace.bytes, {
+        targetText: currentResult.text,
+        replacementText,
+        pageIndex: currentResult.pageIndex,
+        targetOccurrence: currentResult.occurrenceIndex,
+        xPercent: targetRegion.xPercent,
+        yPercent: targetRegion.yPercent,
+        widthPercent: targetRegion.widthPercent,
+        heightPercent: targetRegion.heightPercent,
+        fontSize: targetRegion.fontSize,
+        alignment: textEditAlignment,
+      })
+
+      await commitGeneratedPdf(result.bytes, {
+        fileName: currentWorkspace.fileName,
+        current: currentResult.pageNumber,
+      })
+      await runTextSearch({ preserveActive: false, focusActive: false })
+
+      statusTone = 'idle'
+      status =
+        result.strategy === 'content-stream'
+          ? `Replaced search result on page ${currentResult.pageNumber}`
+          : `Replaced search result on page ${currentResult.pageNumber} with visual fallback`
+    } catch (error) {
+      reportError(error, 'Failed to replace the active search result')
+    } finally {
+      busy = false
+    }
+  }
+
+  async function replaceAllTextSearchResults() {
+    if (!workspace || busy || textSearchBusy || textSearchResults.length === 0) {
+      return
+    }
+
+    const replacementText = textSearchReplacement.trim()
+    if (!replacementText) {
+      reportError(new Error('Enter replacement text before replacing search results.'), 'Replacement text is required')
+      return
+    }
+
+    const normalizedQuery = normalizeTextSearchValue(textSearchQuery, textSearchCaseSensitive)
+    const normalizedReplacement = normalizeTextSearchValue(textSearchReplacement, textSearchCaseSensitive)
+    if (normalizedQuery && normalizedReplacement.includes(normalizedQuery)) {
+      reportError(
+        new Error('Replace all requires replacement text that does not contain the current find text.'),
+        'Replace all would create ambiguous repeated matches',
+      )
+      return
+    }
+
+    const currentWorkspace = workspace
+    const results = [...textSearchResults].sort(
+      (left, right) => right.pageIndex - left.pageIndex || right.occurrenceIndex - left.occurrenceIndex,
+    )
+    let workingBytes = currentWorkspace.bytes
+    let contentStreamReplacements = 0
+    let overlayReplacements = 0
+
+    busy = true
+    statusTone = 'busy'
+    status = `Replacing ${results.length} exact text result${results.length === 1 ? '' : 's'}`
+    lastError = null
+
+    try {
+      for (const result of results) {
+        const replacement = await replaceTargetedTextInDocument(workingBytes, {
+          targetText: result.text,
+          replacementText,
+          pageIndex: result.pageIndex,
+          targetOccurrence: result.occurrenceIndex,
+          xPercent: result.xPercent,
+          yPercent: result.yPercent,
+          widthPercent: result.widthPercent,
+          heightPercent: result.heightPercent,
+          fontSize: result.fontSize,
+          alignment: textEditAlignment,
+        })
+
+        workingBytes = replacement.bytes
+        if (replacement.strategy === 'content-stream') {
+          contentStreamReplacements += 1
+        } else {
+          overlayReplacements += 1
+        }
+      }
+
+      await commitGeneratedPdf(workingBytes, {
+        fileName: currentWorkspace.fileName,
+        current: currentPage,
+      })
+      await runTextSearch({ preserveActive: false, focusActive: false })
+
+      const replacementCount = contentStreamReplacements + overlayReplacements
+      statusTone = 'idle'
+      status =
+        overlayReplacements === 0
+          ? `Replaced ${replacementCount} exact text result${replacementCount === 1 ? '' : 's'}`
+          : contentStreamReplacements === 0
+            ? `Replaced ${replacementCount} exact text result${replacementCount === 1 ? '' : 's'} with visual fallback`
+            : `Replaced ${replacementCount} exact text result${replacementCount === 1 ? '' : 's'} with mixed rewrite and fallback`
+    } catch (error) {
+      reportError(error, 'Failed to replace all search results')
+    } finally {
+      busy = false
+    }
+  }
+
+  function handleTextSearchQueryKeydown(event: KeyboardEvent) {
+    if (event.key !== 'Enter') {
+      return
+    }
+
+    event.preventDefault()
+    void runTextSearch({ preserveActive: false, focusActive: true })
+  }
+
+  function handleTextSearchReplacementKeydown(event: KeyboardEvent) {
+    if (event.key !== 'Enter') {
+      return
+    }
+
+    event.preventDefault()
+    void replaceActiveTextSearchResult()
+  }
+
   function resolveMatchingSelectedTextOccurrences() {
     if (!selectedTextSpan || selectedTextSpan.spanIds.length === 0) {
       return []
@@ -2961,6 +3404,16 @@
       fontSize: nextTarget.fontSize,
     })
     textEditAlignment = 'left'
+
+    const matchingSearchResultIndex = textSearchResults.findIndex(
+      (result) =>
+        result.pageNumber === currentPage && result.startIndex === start && result.endIndex === end,
+    )
+    if (matchingSearchResultIndex >= 0) {
+      activeTextSearchResultIndex = matchingSearchResultIndex
+    } else if (activeTextSearchResult?.pageNumber === currentPage) {
+      activeTextSearchResultIndex = -1
+    }
 
     if (options.focusEditor ?? true) {
       await tick()
@@ -4097,6 +4550,122 @@
               Replace Selected Text
             </button>
           </div>
+          <div class="inspector-block">
+            <div class="section-head compact-head">
+              <h3>Find And Replace</h3>
+              <span class="pill">{textSearchResults.length}</span>
+            </div>
+            <label class="field">
+              <span class="field-label">Find Text</span>
+              <input
+                bind:this={textSearchInput}
+                bind:value={textSearchQuery}
+                class="field-input"
+                data-testid="text-search-query-input"
+                type="text"
+                placeholder="Find exact text"
+                disabled={!workspace || busy || textSearchBusy}
+                on:keydown={handleTextSearchQueryKeydown}
+              />
+            </label>
+            <label class="field">
+              <span class="field-label">Replace Matches With</span>
+              <input
+                bind:value={textSearchReplacement}
+                class="field-input"
+                data-testid="text-search-replacement-input"
+                type="text"
+                placeholder="Replace matched text"
+                disabled={!workspace || busy || textSearchBusy}
+                on:keydown={handleTextSearchReplacementKeydown}
+              />
+            </label>
+            <div class="field-grid">
+              <label class="field">
+                <span class="field-label">Search Scope</span>
+                <select
+                  class="field-input"
+                  bind:value={textSearchScope}
+                  data-testid="text-search-scope-select"
+                  disabled={!workspace || busy || textSearchBusy}
+                >
+                  <option value="page">Current page</option>
+                  <option value="document">Whole document</option>
+                </select>
+              </label>
+              <label class="check-field">
+                <input
+                  class="check-input"
+                  bind:checked={textSearchCaseSensitive}
+                  data-testid="text-search-case-sensitive-checkbox"
+                  type="checkbox"
+                  disabled={!workspace || busy || textSearchBusy}
+                />
+                <span>Case sensitive</span>
+              </label>
+            </div>
+            <div class="tool-grid compact-tool-grid">
+              <button
+                data-testid="text-search-button"
+                on:click={() => runTextSearch({ preserveActive: false, focusActive: true })}
+                disabled={busy || textSearchBusy || !workspace || !textSearchQuery.trim()}
+              >
+                Find Text
+              </button>
+              <button
+                data-testid="previous-search-result-button"
+                on:click={() => jumpToTextSearchResult(-1)}
+                disabled={busy || textSearchBusy || textSearchResults.length === 0}
+              >
+                Prev Result
+              </button>
+              <button
+                data-testid="next-search-result-button"
+                on:click={() => jumpToTextSearchResult(1)}
+                disabled={busy || textSearchBusy || textSearchResults.length === 0}
+              >
+                Next Result
+              </button>
+              <button
+                data-testid="replace-search-result-button"
+                on:click={replaceActiveTextSearchResult}
+                disabled={busy || textSearchBusy || !workspace || activeTextSearchResultIndex < 0 || !textSearchReplacement.trim()}
+              >
+                Replace Result
+              </button>
+              <button
+                data-testid="replace-all-search-results-button"
+                on:click={replaceAllTextSearchResults}
+                disabled={busy || textSearchBusy || !workspace || textSearchResults.length === 0 || !textSearchReplacement.trim()}
+              >
+                Replace All Results
+              </button>
+              <button
+                data-testid="clear-text-search-button"
+                on:click={() => clearTextSearchState({ clearQuery: true, clearReplacement: true })}
+                disabled={busy || textSearchBusy || (!textSearchQuery && textSearchResults.length === 0 && !textSearchReplacement)}
+              >
+                Clear Search
+              </button>
+            </div>
+            {#if textSearchBusy}
+              <span class="muted">Searching local page text...</span>
+            {:else if textSearchResults.length > 0}
+              <div class="stack-list attachment-entry">
+                <span>
+                  Result {activeTextSearchResultIndex >= 0 ? activeTextSearchResultIndex + 1 : 1} of {textSearchResults.length}
+                </span>
+                {#if activeTextSearchResult}
+                  <span>Page {activeTextSearchResult.pageNumber}: {activeTextSearchResult.text}</span>
+                {/if}
+                <span class="muted">Cmd/Ctrl+F focuses search. F3 and Shift+F3 move through results.</span>
+              </div>
+            {:else if textSearchQuery.trim()}
+              <span class="muted">No exact contiguous text matches for the current query.</span>
+            {:else}
+              <span class="muted">Find exact contiguous text on this page or across the full document.</span>
+            {/if}
+          </div>
           <div class="tool-grid compact-tool-grid">
             <button
               data-testid="select-line-targets-button"
@@ -4483,6 +5052,20 @@
                         ></div>
                       {/each}
                     {/if}
+                  {/each}
+                </div>
+              {/if}
+              {#if textTargetMode && currentPageTextSearchResults.length > 0}
+                <div class="text-search-layer">
+                  {#each currentPageTextSearchResults as result}
+                    <div
+                      class:active={result.id === activeTextSearchResult?.id}
+                      class="text-search-result"
+                      style:left={`${result.xPercent}%`}
+                      style:top={`${result.yPercent}%`}
+                      style:width={`${Math.max(result.widthPercent, 0.8)}%`}
+                      style:height={`${Math.max(result.heightPercent, 0.8)}%`}
+                    ></div>
                   {/each}
                 </div>
               {/if}

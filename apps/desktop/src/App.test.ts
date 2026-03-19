@@ -386,6 +386,10 @@ function buildRepeatedPhraseTextTargetSpans(pageNumber: number) {
   ]
 }
 
+function buildDocumentRepeatedPhraseTextTargetSpans(pageNumber: number) {
+  return pageNumber === 1 ? buildDefaultTextTargetSpans(pageNumber) : buildRepeatedPhraseTextTargetSpans(pageNumber)
+}
+
 const sampleTrustReport: PdfTrustReport = {
   signatureCount: 1,
   signatures: [
@@ -1512,6 +1516,123 @@ describe('Sampadan desktop app regression suite', () => {
     expect(calls.map((call) => (call[1] as { targetOccurrence: number }).targetOccurrence)).toEqual([2, 1, 0])
     expect(calls.every((call) => (call[1] as { targetText: string }).targetText === 'Total Cost')).toBe(true)
     expect(calls.every((call) => (call[1] as { replacementText: string }).replacementText === 'Invoice Due')).toBe(true)
+  })
+
+  test('focuses the find field with Ctrl+F and runs page search from the keyboard', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect((screen.getByTestId('toggle-text-target-button') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    await user.click(screen.getByTestId('toggle-text-target-button'))
+    await fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+
+    const queryInput = screen.getByTestId('text-search-query-input') as HTMLInputElement
+    await waitFor(() => {
+      expect(document.activeElement).toBe(queryInput)
+    })
+
+    await user.type(queryInput, 'Page 1 line{enter}')
+
+    await waitFor(() => {
+      expect(screen.getByText('Result 1 of 1')).toBeTruthy()
+      expect(screen.getByText('Page 1: Page 1 line')).toBeTruthy()
+    })
+  })
+
+  test('searches exact text across the document and jumps between result pages', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
+    vi.mocked(viewerModule.extractPageTextSpans).mockImplementation(async (_pdfProxy, pageNumber: number) =>
+      buildDocumentRepeatedPhraseTextTargetSpans(pageNumber),
+    )
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect((screen.getByTestId('toggle-text-target-button') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    await user.click(screen.getByTestId('toggle-text-target-button'))
+    await user.type(screen.getByTestId('text-search-query-input'), 'Total Cost')
+    await user.selectOptions(screen.getByTestId('text-search-scope-select'), 'document')
+    await user.click(screen.getByTestId('text-search-button'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Result 1 of 6')).toBeTruthy()
+      expect(screen.getByText('Page 2: Total Cost')).toBeTruthy()
+      expect(screen.getByText('Page 2 of 3')).toBeTruthy()
+    })
+
+    const yInput = screen.getByLabelText('Y %') as HTMLInputElement
+    expect(Number.parseFloat(yInput.value)).toBeCloseTo(14, 1)
+
+    await user.click(screen.getByTestId('next-search-result-button'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Result 2 of 6')).toBeTruthy()
+    })
+    expect(Number.parseFloat(yInput.value)).toBeCloseTo(22, 1)
+
+    await fireEvent.keyDown(window, { key: 'F3' })
+
+    await waitFor(() => {
+      expect(screen.getByText('Result 3 of 6')).toBeTruthy()
+    })
+    expect(Number.parseFloat(yInput.value)).toBeCloseTo(30, 1)
+
+    await fireEvent.keyDown(window, { key: 'F3' })
+
+    await waitFor(() => {
+      expect(screen.getByText('Result 4 of 6')).toBeTruthy()
+      expect(screen.getByText('Page 3: Total Cost')).toBeTruthy()
+      expect(screen.getByText('Page 3 of 3')).toBeTruthy()
+    })
+  })
+
+  test('replaces all document search results in reverse page and occurrence order', async () => {
+    openDialogMock.mockResolvedValue('C:/docs/sample.pdf')
+    vi.mocked(viewerModule.extractPageTextSpans).mockImplementation(async (_pdfProxy, pageNumber: number) =>
+      buildDocumentRepeatedPhraseTextTargetSpans(pageNumber),
+    )
+
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByTestId('open-pdf-button'))
+    await waitFor(() => {
+      expect((screen.getByTestId('toggle-text-target-button') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    await user.click(screen.getByTestId('toggle-text-target-button'))
+    await user.type(screen.getByTestId('text-search-query-input'), 'Total Cost')
+    await user.selectOptions(screen.getByTestId('text-search-scope-select'), 'document')
+    await user.click(screen.getByTestId('text-search-button'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Result 1 of 6')).toBeTruthy()
+    })
+
+    await user.type(screen.getByTestId('text-search-replacement-input'), 'Invoice Due')
+    await user.click(screen.getByTestId('replace-all-search-results-button'))
+
+    await waitFor(() => {
+      expect(vi.mocked(pdfDocumentOperations.replaceTargetedTextInDocument)).toHaveBeenCalledTimes(6)
+    })
+
+    const calls = vi.mocked(pdfDocumentOperations.replaceTargetedTextInDocument).mock.calls
+    expect(calls.map((call) => (call[1] as { pageIndex: number }).pageIndex)).toEqual([2, 2, 2, 1, 1, 1])
+    expect(calls.map((call) => (call[1] as { targetOccurrence: number }).targetOccurrence)).toEqual([2, 1, 0, 2, 1, 0])
+    expect(calls.every((call) => (call[1] as { targetText: string }).targetText === 'Total Cost')).toBe(true)
+    expect(calls.every((call) => (call[1] as { replacementText: string }).replacementText === 'Invoice Due')).toBe(
+      true,
+    )
   })
 
   test('nudges, resizes, and resets the selected text region', async () => {
